@@ -1,3 +1,2 @@
 target/
-res*
-!resolver.rs
+res/
