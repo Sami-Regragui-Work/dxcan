@@ -7,15 +7,20 @@ mod scanners;
 
 use clap::Parser;
 use futures::stream::{FuturesUnordered, StreamExt};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
 use cli::Args;
-use output::{PortResult, ScanOutput};
+use output::{PortEntry, ScanOutput};
 use resolver::resolve_host;
-use scanners::network::port::{parse_ports, scan_port};
-use scanners::network::rtt::RttTracker;
+use scanners::network::port::PortResult;
+use scanners::network::{
+    port::{parse_ports, scan_port},
+    rtt::RttTracker,
+    service::ServiceProber,
+};
 
 #[tokio::main]
 async fn main() {
@@ -53,47 +58,88 @@ async fn main() {
     }
 
     results.sort_unstable_by_key(|r| r.port);
-    let elapsed = started.elapsed().as_secs_f64();
+    let elapsed = started.elapsed().as_millis() as f64;
+
+    // --- Stage 2: service detection on open ports ---
+    let prober = ServiceProber::new(500, 1000);
+    let mut service_futs = FuturesUnordered::new();
+    for r in results.iter().filter(|r| r.state == "open") {
+        service_futs.push(prober.probe(ip, r.port));
+    }
+    let mut services: HashMap<u16, scanners::network::service::ServiceResult> = HashMap::new();
+    while let Some(s) = service_futs.next().await {
+        services.insert(s.port, s);
+    }
+
+    // --- Output ---
+    let display: Vec<PortEntry> = results
+        .iter()
+        .filter(|r| args.all || r.state == "open")
+        .map(|r| {
+            let svc = services.get(&r.port);
+            PortEntry {
+                port: r.port,
+                protocol: r.protocol.clone(),
+                state: r.state.clone(),
+                latency_ms: r.latency_ms,
+                service: svc.map(|s| s.service.clone()),
+                version: svc.and_then(|s| s.version.clone()),
+                banner_raw: svc.and_then(|s| s.banner_raw.clone()),
+                confidence: svc.map(|s| s.confidence.to_string()),
+                error: r.error.clone(),
+            }
+        })
+        .collect();
 
     if args.json {
-        let display: Vec<PortResult> = results
-            .into_iter()
-            .filter(|r| args.all || r.state == "open")
-            .collect();
         let output = ScanOutput {
             tool: "dxcan".into(),
             host: args.host.clone(),
             ip: ip.to_string(),
-            elapsed_s: elapsed,
+            elapsed_ms: elapsed,
             scanned: total,
             shown: display.len(),
             results: display,
         };
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     } else {
-        let display: Vec<&PortResult> = results
-            .iter()
-            .filter(|r| args.all || r.state == "open")
-            .collect();
-        for r in &display {
-            let extra = r.error.as_deref()
-                .map(|e| format!(" ({e})"))
-                .unwrap_or_default();
-            let lat = fmt_lat(r.latency_ms, args.precise);
-            println!("{}/tcp\t{}\t{}{}", r.port, r.state, lat, extra);
-        }
+        // --- header ---
+        println!("dxcan scan report for {} ({})", args.host, ip);
+        println!("Scanned {total} ports\n");
         println!(
-            "\nScanned {total} ports in {} — {} shown",
-            fmt_elapsed(elapsed, args.precise),
-            display.len()
+            "{:<10} {:<10} {:<13} {:<22} {:<28} {}",
+            "PORT", "STATE", "LATENCY", "SERVICE", "VERSION", "CONFIDENCE"
+        );
+        println!("{}", "-".repeat(90));
+
+        for e in &display {
+            let service = e.service.as_deref().unwrap_or("unknown");
+            let version = e.version.as_deref().unwrap_or("");
+            let confidence = e.confidence.as_deref().unwrap_or("");
+            let lat = fmt_duration(e.latency_ms, args.precise);
+            println!(
+                "{:<10} {:<10} {:<13} {:<22} {:<28} [{}]",
+                format!("{}/{}", e.port, e.protocol),
+                e.state,
+                lat,
+                service,
+                version,
+                confidence
+            );
+        }
+
+        println!(
+            "\n{} shown — scanned in {}",
+            display.len(),
+            fmt_duration(elapsed, args.precise)
         );
     }
 }
 
-fn fmt_lat(ms: f64, precise: bool) -> String {
-    if precise { format!("{ms}ms") } else { format!("{:.4}s", ms / 1000.0) }
-}
-
-fn fmt_elapsed(secs: f64, precise: bool) -> String {
-    if precise { format!("{}ms", secs * 1000.0) } else { format!("{secs:.4}s") }
+fn fmt_duration(ms: f64, precise: bool) -> String {
+    if precise {
+        format!("{:.6}ms", ms)
+    } else {
+        format!("{:.4}s", ms / 1000.0)
+    }
 }

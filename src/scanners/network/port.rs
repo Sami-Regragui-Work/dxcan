@@ -6,8 +6,16 @@ use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
-use crate::output::PortResult;
 use crate::scanners::network::rtt::RttTracker;
+
+#[derive(Debug)]
+pub struct PortResult {
+    pub port: u16,
+    pub protocol: String,
+    pub state: String,
+    pub latency_ms: f64,
+    pub error: Option<String>,
+}
 
 pub fn parse_ports(spec: &str) -> Vec<u16> {
     let mut ports = BTreeSet::new();
@@ -65,17 +73,37 @@ pub async fn scan_port(
     match connect_result {
         Ok(_) => {
             rtt.lock().unwrap().update(latency_ms);
-            PortResult { port, state: "open".into(), latency_ms, error: None }
+            PortResult {
+                port,
+                protocol: "tcp".into(),
+                state: "open".into(),
+                latency_ms,
+                error: None,
+            }
         }
         Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
             rtt.lock().unwrap().update(latency_ms);
-            PortResult { port, state: "closed".into(), latency_ms, error: None }
+            PortResult {
+                port,
+                protocol: "tcp".into(),
+                state: "closed".into(),
+                latency_ms,
+                error: None,
+            }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-            PortResult { port, state: "filtered".into(), latency_ms, error: None }
-        }
-        Err(e) => {
-            PortResult { port, state: "error".into(), latency_ms, error: Some(e.to_string()) }
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => PortResult {
+            port,
+            protocol: "tcp".into(),
+            state: "filtered".into(),
+            latency_ms,
+            error: None,
+        },
+        Err(e) => PortResult {
+            port,
+            protocol: "tcp".into(),
+            state: "error".into(),
+            latency_ms,
+            error: Some(e.to_string()),
+        },
     }
 }
