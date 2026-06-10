@@ -7,7 +7,7 @@ use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 use crate::output::PortResult;
-use crate::scanner::rtt::RttTracker;
+use crate::scanners::network::rtt::RttTracker;
 
 pub fn parse_ports(spec: &str) -> Vec<u16> {
     let mut ports = BTreeSet::new();

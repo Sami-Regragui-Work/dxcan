@@ -3,7 +3,7 @@
 mod cli;
 mod output;
 mod resolver;
-mod scanner;
+mod scanners;
 
 use clap::Parser;
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -14,8 +14,8 @@ use tokio::sync::Semaphore;
 use cli::Args;
 use output::{PortResult, ScanOutput};
 use resolver::resolve_host;
-use scanner::port::{parse_ports, scan_port};
-use scanner::rtt::RttTracker;
+use scanners::network::port::{parse_ports, scan_port};
+use scanners::network::rtt::RttTracker;
 
 #[tokio::main]
 async fn main() {
