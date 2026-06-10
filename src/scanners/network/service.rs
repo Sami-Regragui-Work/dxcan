@@ -31,9 +31,9 @@ pub enum Confidence {
 impl std::fmt::Display for Confidence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Confidence::Confirmed  => write!(f, "confirmed"),
-            Confidence::Heuristic  => write!(f, "heuristic"),
-            Confidence::PortGuess  => write!(f, "port-guess"),
+            Confidence::Confirmed => write!(f, "confirmed"),
+            Confidence::Heuristic => write!(f, "heuristic"),
+            Confidence::PortGuess => write!(f, "port-guess"),
         }
     }
 }
@@ -46,11 +46,11 @@ impl serde::Serialize for Confidence {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ServiceResult {
-    pub port:        u16,
-    pub service:     String,
-    pub version:     Option<String>,
-    pub banner_raw:  Option<String>,   // UTF-8 lossy; raw bytes hex if non-printable
-    pub confidence:  Confidence,
+    pub port: u16,
+    pub service: String,
+    pub version: Option<String>,
+    pub banner_raw: Option<String>, // UTF-8 lossy; raw bytes hex if non-printable
+    pub confidence: Confidence,
 }
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ pub struct ServiceResult {
 
 pub struct ServiceProber {
     passive_timeout: Duration,
-    active_timeout:  Duration,
+    active_timeout: Duration,
 }
 
 impl ServiceProber {
@@ -68,7 +68,7 @@ impl ServiceProber {
     pub fn new(passive_ms: u64, active_ms: u64) -> Self {
         Self {
             passive_timeout: Duration::from_millis(passive_ms),
-            active_timeout:  Duration::from_millis(active_ms),
+            active_timeout: Duration::from_millis(active_ms),
         }
     }
 
@@ -78,7 +78,7 @@ impl ServiceProber {
 
         // --- connect ---
         let stream = match timeout(self.active_timeout, TcpStream::connect(addr)).await {
-            Ok(Ok(s))  => s,
+            Ok(Ok(s)) => s,
             Ok(Err(_)) | Err(_) => return self.port_fallback(port),
         };
 
@@ -109,8 +109,8 @@ impl ServiceProber {
             loop {
                 readable.await.ok()?;
                 match stream.try_read(&mut buf) {
-                    Ok(0)  => return None,   // EOF
-                    Ok(n)  => return Some(n),
+                    Ok(0) => return None, // EOF
+                    Ok(n) => return Some(n),
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         readable = stream.readable();
                         continue;
@@ -118,7 +118,9 @@ impl ServiceProber {
                     Err(_) => return None,
                 }
             }
-        }).await {
+        })
+        .await
+        {
             Ok(Some(n)) => n,
             _ => return None,
         };
@@ -135,7 +137,10 @@ impl ServiceProber {
         let probe = active_probe_bytes(port)?;
 
         // Send probe
-        if timeout(self.active_timeout, stream.write_all(probe)).await.is_err() {
+        if timeout(self.active_timeout, stream.write_all(probe))
+            .await
+            .is_err()
+        {
             return None;
         }
 
@@ -159,7 +164,7 @@ impl ServiceProber {
         ServiceResult {
             port,
             service,
-            version:    None,
+            version: None,
             banner_raw: None,
             confidence: Confidence::PortGuess,
         }
@@ -173,11 +178,7 @@ impl ServiceProber {
 // Ordered: most specific first.
 // ---------------------------------------------------------------------------
 
-fn match_banner(
-    banner: &[u8],
-    port: u16,
-    confidence: Confidence,
-) -> Option<ServiceResult> {
+fn match_banner(banner: &[u8], port: u16, confidence: Confidence) -> Option<ServiceResult> {
     let text = String::from_utf8_lossy(banner);
     let banner_raw = Some(sanitise_banner(banner));
 
@@ -206,7 +207,9 @@ fn match_banner(
     }
 
     // SMTP — "220 mail.example.com ESMTP Postfix"
-    if text.starts_with("220") && (text.contains("SMTP") || text.contains("smtp") || port == 25 || port == 587) {
+    if text.starts_with("220")
+        && (text.contains("SMTP") || text.contains("smtp") || port == 25 || port == 587)
+    {
         let version = extract_version_from_220(&text);
         return Some(ServiceResult {
             port,
@@ -254,12 +257,79 @@ fn match_banner(
 
     // HTTP — response to HEAD probe
     // "HTTP/1.1 200 OK" or any HTTP response
+    // HTTP family — check specific protocols first before labelling as http
     if text.starts_with("HTTP/") {
-        let version = extract_http_server(&text);
+        // IPP — Internet Printing Protocol (CUPS, port 631)
+        if port == 631 || text.contains("application/ipp") {
+            return Some(ServiceResult {
+                port,
+                service: "ipp".into(),
+                version: extract_http_server(&text),
+                banner_raw,
+                confidence,
+            });
+        }
+
+        // Elasticsearch — JSON root response
+        if port == 9200 || text.contains("\"tagline\"") || text.contains("\"cluster_name\"") {
+            return Some(ServiceResult {
+                port,
+                service: "elasticsearch".into(),
+                version: extract_json_field(&text, "number"),
+                banner_raw,
+                confidence,
+            });
+        }
+
+        // Prometheus
+        if text.contains("prometheus") || port == 9090 {
+            return Some(ServiceResult {
+                port,
+                service: "prometheus".into(),
+                version: extract_http_server(&text),
+                banner_raw,
+                confidence,
+            });
+        }
+
+        // Grafana
+        if port == 3000 && text.contains("Grafana") {
+            return Some(ServiceResult {
+                port,
+                service: "grafana".into(),
+                version: extract_http_server(&text),
+                banner_raw,
+                confidence,
+            });
+        }
+
+        // Kubernetes API server
+        if port == 6443 || port == 8080 && text.contains("k8s") {
+            return Some(ServiceResult {
+                port,
+                service: "kubernetes-api".into(),
+                version: None,
+                banner_raw,
+                confidence,
+            });
+        }
+
+        // Docker API
+        if port == 2375 || port == 2376 {
+            return Some(ServiceResult {
+                port,
+                service: "docker".into(),
+                version: extract_json_field(&text, "Version"),
+                banner_raw,
+                confidence,
+            });
+        }
+
+        // Generic HTTP fallback
         return Some(ServiceResult {
             port,
             service: "http".into(),
-            version,
+            version: extract_http_server(&text),
             banner_raw,
             confidence,
         });
@@ -322,20 +392,22 @@ fn match_banner(
 
 fn active_probe_bytes(port: u16) -> Option<&'static [u8]> {
     match port {
-        80 | 8080 | 8000 | 8443 | 443 | 3000 | 4000 | 5000 | 9000 =>
-            Some(b"HEAD / HTTP/1.0\r\n\r\n"),
-        6379 =>
-            Some(b"PING\r\n"),
+        80 | 8080 | 8000 | 8443 | 443 | 3000 | 4000 | 5000 | 9000 => {
+            Some(b"HEAD / HTTP/1.0\r\n\r\n")
+        }
+        6379 => Some(b"PING\r\n"),
         5432 =>
-            // PostgreSQL startup message (simplified — triggers error banner)
-            Some(b"\x00\x00\x00\x08\x04\xd2\x16\x2f"),
-        11211 =>
-            Some(b"version\r\n"),     // Memcached
-        9200 | 9300 =>
-            Some(b"GET / HTTP/1.0\r\n\r\n"),  // Elasticsearch
+        // PostgreSQL startup message (simplified — triggers error banner)
+        {
+            Some(b"\x00\x00\x00\x08\x04\xd2\x16\x2f")
+        }
+        11211 => Some(b"version\r\n"),                  // Memcached
+        9200 | 9300 => Some(b"GET / HTTP/1.0\r\n\r\n"), // Elasticsearch
         _ =>
-            // Generic: HTTP probe — catches misconfigured services on odd ports
-            Some(b"HEAD / HTTP/1.0\r\n\r\n"),
+        // Generic: HTTP probe — catches misconfigured services on odd ports
+        {
+            Some(b"HEAD / HTTP/1.0\r\n\r\n")
+        }
     }
 }
 
@@ -355,6 +427,18 @@ fn extract_version_from_220(text: &str) -> Option<String> {
     }
 }
 
+/// Extract a field value from a JSON response body.
+/// Looks for "field": "value" — naive but sufficient for banner responses.
+fn extract_json_field(text: &str, field: &str) -> Option<String> {
+    let needle = format!("\"{field}\"");
+    let pos = text.find(&needle)?;
+    let after = text[pos + needle.len()..].trim_start();
+    let after = after.strip_prefix(':')?.trim_start();
+    let after = after.strip_prefix('"')?;
+    let end = after.find('"')?;
+    Some(after[..end].to_string())
+}
+
 /// Pull Server header from HTTP response.
 /// "Server: nginx/1.24.0" → "nginx/1.24.0"
 fn extract_http_server(text: &str) -> Option<String> {
@@ -370,20 +454,26 @@ fn extract_http_server(text: &str) -> Option<String> {
 /// MySQL handshake: version string starts at byte 5, null-terminated.
 fn extract_mysql_version(banner: &[u8]) -> Option<String> {
     let start = 5;
-    let end = banner[start..].iter().position(|&b| b == 0).map(|i| start + i)?;
+    let end = banner[start..]
+        .iter()
+        .position(|&b| b == 0)
+        .map(|i| start + i)?;
     String::from_utf8(banner[start..end].to_vec()).ok()
 }
 
 /// Sanitise raw banner bytes for output.
 /// Printable ASCII kept as-is; non-printable bytes shown as \xNN.
 fn sanitise_banner(banner: &[u8]) -> String {
-    banner.iter().map(|&b| {
-        if b.is_ascii_graphic() || b == b' ' {
-            (b as char).to_string()
-        } else {
-            format!("\\x{b:02x}")
-        }
-    }).collect()
+    banner
+        .iter()
+        .map(|&b| {
+            if b.is_ascii_graphic() || b == b' ' {
+                (b as char).to_string()
+            } else {
+                format!("\\x{b:02x}")
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -392,50 +482,50 @@ fn sanitise_banner(banner: &[u8]) -> String {
 
 fn port_label(port: u16) -> Option<&'static str> {
     match port {
-        21    => Some("ftp"),
-        22    => Some("ssh"),
-        23    => Some("telnet"),
-        25    => Some("smtp"),
-        53    => Some("dns"),
-        80    => Some("http"),
-        110   => Some("pop3"),
-        111   => Some("rpcbind"),
-        143   => Some("imap"),
-        389   => Some("ldap"),
-        443   => Some("https"),
-        445   => Some("smb"),
-        465   => Some("smtps"),
-        587   => Some("smtp-submission"),
-        636   => Some("ldaps"),
-        993   => Some("imaps"),
-        995   => Some("pop3s"),
-        1433  => Some("mssql"),
-        1521  => Some("oracle"),
-        2375  => Some("docker"),
-        2376  => Some("docker-tls"),
-        2379  => Some("etcd"),
-        2181  => Some("zookeeper"),
-        3000  => Some("http-alt"),
-        3306  => Some("mysql"),
-        3389  => Some("rdp"),
-        4369  => Some("epmd"),      // Erlang port mapper — RabbitMQ
-        5432  => Some("postgresql"),
-        5672  => Some("amqp"),      // RabbitMQ
-        5900  => Some("vnc"),
-        6379  => Some("redis"),
-        6443  => Some("kubernetes-api"),
-        8080  => Some("http-alt"),
-        8443  => Some("https-alt"),
-        8888  => Some("http-alt"),
-        9000  => Some("http-alt"),
-        9092  => Some("kafka"),
-        9200  => Some("elasticsearch"),
-        9300  => Some("elasticsearch-cluster"),
+        21 => Some("ftp"),
+        22 => Some("ssh"),
+        23 => Some("telnet"),
+        25 => Some("smtp"),
+        53 => Some("dns"),
+        80 => Some("http"),
+        110 => Some("pop3"),
+        111 => Some("rpcbind"),
+        143 => Some("imap"),
+        389 => Some("ldap"),
+        443 => Some("https"),
+        445 => Some("smb"),
+        465 => Some("smtps"),
+        587 => Some("smtp-submission"),
+        636 => Some("ldaps"),
+        993 => Some("imaps"),
+        995 => Some("pop3s"),
+        1433 => Some("mssql"),
+        1521 => Some("oracle"),
+        2375 => Some("docker"),
+        2376 => Some("docker-tls"),
+        2379 => Some("etcd"),
+        2181 => Some("zookeeper"),
+        3000 => Some("http-alt"),
+        3306 => Some("mysql"),
+        3389 => Some("rdp"),
+        4369 => Some("epmd"), // Erlang port mapper — RabbitMQ
+        5432 => Some("postgresql"),
+        5672 => Some("amqp"), // RabbitMQ
+        5900 => Some("vnc"),
+        6379 => Some("redis"),
+        6443 => Some("kubernetes-api"),
+        8080 => Some("http-alt"),
+        8443 => Some("https-alt"),
+        8888 => Some("http-alt"),
+        9000 => Some("http-alt"),
+        9092 => Some("kafka"),
+        9200 => Some("elasticsearch"),
+        9300 => Some("elasticsearch-cluster"),
         10250 => Some("kubelet"),
         11211 => Some("memcached"),
         15672 => Some("rabbitmq-mgmt"),
         27017 => Some("mongodb"),
         50000 => Some("db2"),
-        _     => None,
+        _ => None,
     }
 }

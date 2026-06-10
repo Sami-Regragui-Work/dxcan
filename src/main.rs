@@ -110,7 +110,7 @@ async fn main() {
             "{:<10} {:<10} {:<13} {:<22} {:<28} {}",
             "PORT", "STATE", "LATENCY", "SERVICE", "VERSION", "CONFIDENCE"
         );
-        println!("{}", "-".repeat(90));
+        println!("{}", "-".repeat(99));
 
         for e in &display {
             let service = e.service.as_deref().unwrap_or("unknown");
