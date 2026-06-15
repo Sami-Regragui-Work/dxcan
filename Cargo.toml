@@ -7,9 +7,15 @@ edition = "2021"
 name = "dxcan"
 path = "src/main.rs"
 
+[[bin]]
+name = "dxcan-nmap"
+path = "src/bin/dxcan_nmap/main.rs"
+
 [dependencies]
 clap       = { version = "4", features = ["derive"] }
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 futures    = "0.3"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }
+tokio      = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "process"] }
+quick-xml  = { version = "0.40", features = ["serialize"] }
+regex      = "1"
