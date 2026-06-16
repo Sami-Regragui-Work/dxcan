@@ -35,6 +35,10 @@ struct Args {
     #[arg(long)]
     os: bool,
 
+    /// Enable service/version detection (-sV)
+    #[arg(short, long)]
+    service: bool,
+
     /// Nmap timing template T0–T5 (default: 4)
     #[arg(long, default_value_t = 4)]
     timing: u8,
@@ -86,14 +90,14 @@ async fn main() {
 
     // --- check nmap is available ---
     match nmap_runner::check_nmap().await {
-        Ok(v)  => eprintln!("[dxcan-nmap] using {v}"),
+        Ok(v) => eprintln!("[dxcan-nmap] using {v}"),
         Err(e) => {
             eprintln!("[error] {e}");
             std::process::exit(1);
         }
     }
 
-    let cfg      = build_config(&args);
+    let cfg = build_config(&args);
     let wall_start = Instant::now();
 
     if !args.json {
@@ -105,7 +109,7 @@ async fn main() {
 
     // --- run nmap ---
     let raw = match nmap_runner::run(&cfg).await {
-        Ok(r)  => r,
+        Ok(r) => r,
         Err(e) => {
             eprintln!("[error] {e}");
             std::process::exit(1);
@@ -129,7 +133,10 @@ async fn main() {
     }
 
     if raw.xml.is_empty() {
-        eprintln!("[error] Nmap produced no XML output (exit code {})", raw.exit_code);
+        eprintln!(
+            "[error] Nmap produced no XML output (exit code {})",
+            raw.exit_code
+        );
         if raw.exit_code == 1 {
             eprintln!("[hint] OS detection (-O / --os) requires root or CAP_NET_RAW.");
         }
@@ -138,7 +145,7 @@ async fn main() {
 
     // --- parse XML ---
     let parsed = match nmap_xml::parse(&raw.xml) {
-        Ok(r)  => r,
+        Ok(r) => r,
         Err(e) => {
             eprintln!("[error] XML parse failed: {e}");
             std::process::exit(1);
@@ -166,22 +173,22 @@ async fn main() {
         .iter()
         .filter(|p| args.all || p.state == "open")
         .map(|p| PortEntry {
-            port:       p.port,
-            protocol:   p.protocol.clone(),
-            state:      p.state.clone(),
+            port: p.port,
+            protocol: p.protocol.clone(),
+            state: p.state.clone(),
             latency_ms: p.rtt_ms.unwrap_or(0.0),
-            service:    p.service.clone(),
-            version:    p.version_string.clone(),
+            service: p.service.clone(),
+            version: p.version_string.clone(),
             banner_raw: None, // Nmap XML doesn't expose raw banners
             confidence: Some("nmap".into()),
-            error:      None,
+            error: None,
         })
         .collect();
 
     let scanned = all_ports.len();
-    let shown   = display.len();
-    let ip      = host.ip.clone();
-    let os      = host.os_guess.map(|g| {
+    let shown = display.len();
+    let ip = host.ip.clone();
+    let os = host.os_guess.map(|g| {
         if let Some(acc) = host.os_accuracy {
             format!("{g} ({acc}%)")
         } else {
@@ -192,14 +199,14 @@ async fn main() {
     // --- output ---
     if args.json {
         let out = ScanOutput {
-            tool:       "dxcan-nmap".into(),
-            host:       args.host.clone(),
-            ip:         ip.clone(),
+            tool: "dxcan-nmap".into(),
+            host: args.host.clone(),
+            ip: ip.clone(),
             elapsed_ms,
             scanned,
             shown,
-            results:    display,
-            os_guess:   os,
+            results: display,
+            os_guess: os,
         };
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
     } else {
@@ -242,7 +249,7 @@ fn build_config(args: &Args) -> nmap_runner::NmapConfig {
     nmap_runner::NmapConfig {
         host:              args.host.clone(),
         ports:             args.ports.clone(),
-        service_detection: true,
+        service_detection: args.service,
         os_detection:      args.os,
         version_intensity: args.intensity,
         scan_timeout:      std::time::Duration::from_secs(args.scan_timeout),

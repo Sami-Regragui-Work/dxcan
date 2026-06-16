@@ -1,3 +1,4 @@
-target/
-res/
-.cursor/
+*
+!src
+!src/**
+!Cargo.*
