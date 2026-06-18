@@ -23,6 +23,11 @@ pub struct Args {
     #[arg(short, long, default_value_t = 500)]
     pub workers: usize,
 
+    /// Enable service version detection — banner grab + active probe
+    /// (equivalent to nmap -sV; slower but produces VERSION and CONFIDENCE)
+    #[arg(long = "service-version", short = 's', alias = "sv")]
+    pub service_version: bool,
+
     /// Output structured JSON
     #[arg(short, long)]
     pub json: bool,

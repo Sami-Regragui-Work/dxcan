@@ -1,8 +1,7 @@
-//! dxcan-nmap — Nmap-backed beta of the dxcan port scanner.
+//! dxcan-nmap — Nmap-backed scanner.
 //!
 //! Wraps Nmap cleanly: builds args, runs the process, parses XML output,
 //! and emits dxcan's standard JSON or plain-text format.
-//! Comparable against dxcan-native on the same host/port inputs.
 
 mod nmap_runner;
 mod nmap_xml;
@@ -19,7 +18,7 @@ use std::time::Instant;
 #[derive(Parser)]
 #[command(
     name = "dxcan-nmap",
-    about = "dxcan Nmap-backed beta — wraps Nmap, emits dxcan JSON/text output.",
+    about = "dxcan Nmap-backed scanner — wraps Nmap, emits dxcan JSON/text output.",
     version
 )]
 struct Args {
@@ -35,15 +34,15 @@ struct Args {
     #[arg(long)]
     os: bool,
 
-    /// Enable service/version detection (-sV)
-    #[arg(short, long)]
-    service: bool,
+    /// Enable service version detection (-sV) — produces VERSION and CONFIDENCE columns
+    #[arg(long = "service-version", short = 's', alias = "sv")]
+    service_version: bool,
 
     /// Nmap timing template T0–T5 (default: 4)
     #[arg(long, default_value_t = 4)]
     timing: u8,
 
-    /// Service version detection intensity 0–9 (default: 5)
+    /// Service version detection intensity 0–9 (default: 5, only used with --service-version)
     #[arg(long, default_value_t = 5)]
     intensity: u8,
 
@@ -62,6 +61,10 @@ struct Args {
     /// Show closed and filtered ports too (default: open only)
     #[arg(long)]
     all: bool,
+
+    /// Show debug timing summary
+    #[arg(long)]
+    debug: bool,
 
     /// Print the Nmap command that would be run, then exit
     #[arg(long)]
@@ -118,10 +121,8 @@ async fn main() {
 
     let wall_elapsed = wall_start.elapsed().as_millis() as f64;
 
-    // Forward nmap stderr if it has anything useful
     if !raw.stderr.is_empty() {
         for line in raw.stderr.lines() {
-            // Skip the "Starting Nmap" banner and progress lines to keep stderr clean
             if line.starts_with("Starting Nmap")
                 || line.starts_with("Nmap scan report")
                 || line.starts_with("Note:")
@@ -152,7 +153,6 @@ async fn main() {
         }
     };
 
-    // --- we target a single host ---
     let host = match parsed.hosts.into_iter().next() {
         Some(h) => h,
         None => {
@@ -162,7 +162,7 @@ async fn main() {
     };
 
     // Nmap's own elapsed in ms (falls back to wall clock)
-    let elapsed_ms = parsed
+    let nmap_elapsed_ms = parsed
         .elapsed_secs
         .map(|s| s * 1000.0)
         .unwrap_or(wall_elapsed);
@@ -178,9 +178,17 @@ async fn main() {
             state: p.state.clone(),
             latency_ms: p.rtt_ms.unwrap_or(0.0),
             service: p.service.clone(),
-            version: p.version_string.clone(),
-            banner_raw: None, // Nmap XML doesn't expose raw banners
-            confidence: Some("nmap".into()),
+            version: if args.service_version {
+                p.version_string.clone()
+            } else {
+                None
+            },
+            banner_raw: None,
+            confidence: if args.service_version {
+                Some("nmap".into())
+            } else {
+                None
+            },
             error: None,
         })
         .collect();
@@ -202,7 +210,7 @@ async fn main() {
             tool: "dxcan-nmap".into(),
             host: args.host.clone(),
             ip: ip.clone(),
-            elapsed_ms,
+            elapsed_ms: wall_elapsed,
             scanned,
             shown,
             results: display,
@@ -214,30 +222,55 @@ async fn main() {
         if let Some(ref g) = os {
             println!("OS guess: {g}");
         }
-        println!(
-            "Nmap scanned {} ports in {}\n",
-            scanned,
-            fmt_duration(elapsed_ms, args.precise)
-        );
+        println!("Scanned {} ports\n", scanned);
 
-        println!(
-            "{:<10} {:<10} {:<22} {:<35}",
-            "PORT", "STATE", "SERVICE", "VERSION"
-        );
-        println!("{}", "-".repeat(80));
-
-        for e in &display {
+        if args.service_version {
             println!(
-                "{:<10} {:<10} {:<22} {:<35}",
-                format!("{}/{}", e.port, e.protocol),
-                e.state,
-                e.service.as_deref().unwrap_or("unknown"),
-                e.version.as_deref().unwrap_or(""),
+                "{:<10} {:<10} {:<13} {:<22} {:<35}",
+                "PORT", "STATE", "LATENCY", "SERVICE", "VERSION"
             );
+            println!("{}", "-".repeat(93));
+            for e in &display {
+                println!(
+                    "{:<10} {:<10} {:<13} {:<22} {:<35}",
+                    format!("{}/{}", e.port, e.protocol),
+                    e.state,
+                    fmt_duration(e.latency_ms, args.precise),
+                    e.service.as_deref().unwrap_or("unknown"),
+                    e.version.as_deref().unwrap_or(""),
+                );
+            }
+        } else {
+            println!(
+                "{:<10} {:<10} {:<13} {}",
+                "PORT", "STATE", "LATENCY", "SERVICE"
+            );
+            println!("{}", "-".repeat(50));
+            for e in &display {
+                println!(
+                    "{:<10} {:<10} {:<13} {}",
+                    format!("{}/{}", e.port, e.protocol),
+                    e.state,
+                    fmt_duration(e.latency_ms, args.precise),
+                    e.service.as_deref().unwrap_or("unknown"),
+                );
+            }
         }
 
-        println!("\n{shown} ports shown");
-        println!("Wall time: {}", fmt_duration(wall_elapsed, args.precise));
+        println!(
+            "\n{shown} shown — scanned in {}",
+            fmt_duration(wall_elapsed, args.precise)
+        );
+
+        if args.debug {
+            println!("\n--- debug ---");
+            println!("nmap elapsed:    {}", fmt_duration(nmap_elapsed_ms, true));
+            println!("wall total:      {}", fmt_duration(wall_elapsed, true));
+            println!(
+                "overhead:        {}",
+                fmt_duration(wall_elapsed - nmap_elapsed_ms, true)
+            );
+        }
     }
 }
 
@@ -247,14 +280,14 @@ async fn main() {
 
 fn build_config(args: &Args) -> nmap_runner::NmapConfig {
     nmap_runner::NmapConfig {
-        host:              args.host.clone(),
-        ports:             args.ports.clone(),
-        service_detection: args.service,
-        os_detection:      args.os,
+        host: args.host.clone(),
+        ports: args.ports.clone(),
+        service_detection: args.service_version,
+        os_detection: args.os,
         version_intensity: args.intensity,
-        scan_timeout:      std::time::Duration::from_secs(args.scan_timeout),
-        timing:            args.timing,
-        extra_args:        args.extra.clone(),
+        scan_timeout: std::time::Duration::from_secs(args.scan_timeout),
+        timing: args.timing,
+        extra_args: args.extra.clone(),
     }
 }
 

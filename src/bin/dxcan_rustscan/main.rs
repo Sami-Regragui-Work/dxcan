@@ -1,10 +1,8 @@
-//! dxcan-rustscan — RustScan-backed beta of the dxcan port scanner.
+//! dxcan-rustscan — RustScan-backed scanner.
 //!
 //! Two-phase pipeline:
-//!   1. RustScan — fast port discovery (finds open ports only)
+//!   1. RustScan — fast port discovery
 //!   2. Nmap     — service/version/OS detection on discovered ports only
-//!
-//! Comparable against dxcan-nmap and dxcan-native on the same host/port inputs.
 
 mod nmap_runner;
 mod nmap_xml;
@@ -22,7 +20,7 @@ use std::time::Instant;
 #[derive(Parser)]
 #[command(
     name = "dxcan-rustscan",
-    about = "dxcan RustScan-backed beta — fast port discovery then Nmap service detection.",
+    about = "dxcan RustScan-backed scanner — fast port discovery then Nmap service detection.",
     version
 )]
 struct Args {
@@ -38,9 +36,9 @@ struct Args {
     #[arg(long)]
     os: bool,
 
-    /// Enable service/version detection (-sV)
-    #[arg(short, long)]
-    service: bool,
+    /// Enable service version detection (-sV) — produces VERSION column
+    #[arg(long = "service-version", short = 's', alias = "sv")]
+    service_version: bool,
 
     /// RustScan batch size — sockets opened per cycle (default: 5000)
     #[arg(long, default_value_t = 5000)]
@@ -54,7 +52,7 @@ struct Args {
     #[arg(long, default_value_t = 4)]
     timing: u8,
 
-    /// Service version detection intensity 0–9 (default: 5)
+    /// Service version detection intensity 0–9 (default: 5, only used with --service-version)
     #[arg(long, default_value_t = 5)]
     intensity: u8,
 
@@ -69,6 +67,10 @@ struct Args {
     /// Show full latency precision in plain text output
     #[arg(long)]
     precise: bool,
+
+    /// Show debug timing summary
+    #[arg(long)]
+    debug: bool,
 
     /// Print the commands that would be run, then exit
     #[arg(long)]
@@ -135,18 +137,17 @@ async fn main() {
         }
     };
 
-    let phase1_elapsed = wall_start.elapsed().as_millis();
+    let phase1_ms = wall_start.elapsed().as_millis() as f64;
 
     if open_ports.is_empty() {
         if !args.json {
             eprintln!("[dxcan-rustscan] no open ports found");
         }
-        // Emit empty result
         let out = ScanOutput {
             tool: "dxcan-rustscan".into(),
             host: args.host.clone(),
             ip: args.host.clone(),
-            elapsed_ms: phase1_elapsed as f64,
+            elapsed_ms: phase1_ms,
             scanned: 0,
             shown: 0,
             results: vec![],
@@ -156,7 +157,11 @@ async fn main() {
             println!("{}", serde_json::to_string_pretty(&out).unwrap());
         } else {
             println!("dxcan-rustscan: no open ports on {}", args.host);
-            println!("Phase 1 (discovery): {}ms", phase1_elapsed);
+            if args.debug {
+                println!("\n--- debug ---");
+                println!("phase 1 (rustscan): {:.3}ms", phase1_ms);
+                println!("wall total:         {:.3}ms", phase1_ms);
+            }
         }
         return;
     }
@@ -164,7 +169,7 @@ async fn main() {
     if !args.json {
         eprintln!(
             "[dxcan-rustscan] phase 1 done in {}ms — {} open port(s): {}",
-            phase1_elapsed,
+            phase1_ms as u64,
             open_ports.len(),
             open_ports
                 .iter()
@@ -172,11 +177,11 @@ async fn main() {
                 .collect::<Vec<_>>()
                 .join(",")
         );
-        eprintln!("[dxcan-rustscan] phase 2 — service/OS detection via Nmap ...");
+        eprintln!("[dxcan-rustscan] phase 2 — service detection via Nmap ...");
     }
 
     // -----------------------------------------------------------------------
-    // Phase 2: Nmap — service + OS detection on open ports only
+    // Phase 2: Nmap — on open ports only
     // -----------------------------------------------------------------------
     let port_spec = open_ports
         .iter()
@@ -187,7 +192,7 @@ async fn main() {
     let nmap_cfg = nmap_runner::NmapConfig {
         host: args.host.clone(),
         ports: port_spec,
-        service_detection: args.service,
+        service_detection: args.service_version,
         os_detection: args.os,
         version_intensity: args.intensity,
         scan_timeout,
@@ -203,10 +208,9 @@ async fn main() {
         }
     };
 
-    let wall_elapsed = wall_start.elapsed().as_millis() as f64;
-    let phase2_elapsed = wall_elapsed - phase1_elapsed as f64;
+    let wall_ms = wall_start.elapsed().as_millis() as f64;
+    let phase2_ms = wall_ms - phase1_ms;
 
-    // Forward Nmap stderr
     if !raw.stderr.is_empty() {
         for line in raw.stderr.lines() {
             if line.starts_with("Starting Nmap")
@@ -249,10 +253,7 @@ async fn main() {
         }
     };
 
-    let nmap_elapsed_ms = parsed
-        .elapsed_secs
-        .map(|s| s * 1000.0)
-        .unwrap_or(phase2_elapsed);
+    let nmap_elapsed_ms = parsed.elapsed_secs.map(|s| s * 1000.0).unwrap_or(phase2_ms);
 
     let display: Vec<PortEntry> = host
         .ports
@@ -264,9 +265,17 @@ async fn main() {
             state: p.state.clone(),
             latency_ms: p.rtt_ms.unwrap_or(0.0),
             service: p.service.clone(),
-            version: p.version_string.clone(),
+            version: if args.service_version {
+                p.version_string.clone()
+            } else {
+                None
+            },
             banner_raw: None,
-            confidence: Some("nmap".into()),
+            confidence: if args.service_version {
+                Some("nmap".into())
+            } else {
+                None
+            },
             error: None,
         })
         .collect();
@@ -285,7 +294,7 @@ async fn main() {
             tool: "dxcan-rustscan".into(),
             host: args.host.clone(),
             ip: ip.clone(),
-            elapsed_ms: wall_elapsed,
+            elapsed_ms: wall_ms,
             scanned: open_ports.len(),
             shown: display.len(),
             results: display,
@@ -297,33 +306,60 @@ async fn main() {
         if let Some(ref g) = os {
             println!("OS guess: {g}");
         }
-        println!("Phase 1 (RustScan discovery): {}ms", phase1_elapsed);
-        println!(
-            "Phase 2 (Nmap service scan):  {}",
-            fmt_duration(nmap_elapsed_ms, args.precise)
-        );
-        println!(
-            "Total wall time:              {}\n",
-            fmt_duration(wall_elapsed, args.precise)
-        );
+        println!("Scanned {} ports\n", open_ports.len());
 
-        println!(
-            "{:<10} {:<10} {:<22} {:<35}",
-            "PORT", "STATE", "SERVICE", "VERSION"
-        );
-        println!("{}", "-".repeat(80));
-
-        for e in &display {
+        if args.service_version {
             println!(
-                "{:<10} {:<10} {:<22} {:<35}",
-                format!("{}/{}", e.port, e.protocol),
-                e.state,
-                e.service.as_deref().unwrap_or("unknown"),
-                e.version.as_deref().unwrap_or(""),
+                "{:<10} {:<10} {:<13} {:<22} {:<35}",
+                "PORT", "STATE", "LATENCY", "SERVICE", "VERSION"
             );
+            println!("{}", "-".repeat(93));
+            for e in &display {
+                println!(
+                    "{:<10} {:<10} {:<13} {:<22} {:<35}",
+                    format!("{}/{}", e.port, e.protocol),
+                    e.state,
+                    fmt_duration(e.latency_ms, args.precise),
+                    e.service.as_deref().unwrap_or("unknown"),
+                    e.version.as_deref().unwrap_or(""),
+                );
+            }
+        } else {
+            println!(
+                "{:<10} {:<10} {:<13} {}",
+                "PORT", "STATE", "LATENCY", "SERVICE"
+            );
+            println!("{}", "-".repeat(50));
+            for e in &display {
+                println!(
+                    "{:<10} {:<10} {:<13} {}",
+                    format!("{}/{}", e.port, e.protocol),
+                    e.state,
+                    fmt_duration(e.latency_ms, args.precise),
+                    e.service.as_deref().unwrap_or("unknown"),
+                );
+            }
         }
 
-        println!("\n{} ports shown", display.len());
+        println!(
+            "\n{} shown — scanned in {}",
+            display.len(),
+            fmt_duration(wall_ms, args.precise)
+        );
+
+        if args.debug {
+            println!("\n--- debug ---");
+            println!("phase 1 (rustscan): {}", fmt_duration(phase1_ms, true));
+            println!(
+                "phase 2 (nmap):     {}",
+                fmt_duration(nmap_elapsed_ms, true)
+            );
+            println!(
+                "overhead:           {}",
+                fmt_duration(phase2_ms - nmap_elapsed_ms, true)
+            );
+            println!("wall total:         {}", fmt_duration(wall_ms, true));
+        }
     }
 }
 

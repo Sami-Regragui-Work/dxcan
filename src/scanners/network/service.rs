@@ -467,7 +467,7 @@ fn sanitise_banner(banner: &[u8]) -> String {
 // Well-known port labels (Layer 3 fallback)
 // ---------------------------------------------------------------------------
 
-fn port_label(port: u16) -> Option<&'static str> {
+pub fn port_label(port: u16) -> Option<&'static str> {
     match port {
         21 => Some("ftp"),
         22 => Some("ssh"),
