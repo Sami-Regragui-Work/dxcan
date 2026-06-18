@@ -34,4 +34,8 @@ pub struct Args {
     /// Show closed and filtered ports (default: open only)
     #[arg(long)]
     pub all: bool,
+
+    /// Show debug summary: per-phase timing breakdown after the table
+    #[arg(long)]
+    pub debug: bool,
 }
