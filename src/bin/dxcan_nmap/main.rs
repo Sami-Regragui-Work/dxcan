@@ -160,32 +160,27 @@ async fn main() {
 
         if args.service_version {
             println!(
-                "{:<10} {:<10} {:<13} {:<22} {:<35}",
-                "PORT", "STATE", "LATENCY", "SERVICE", "VERSION"
+                "{:<10} {:<10} {:<22} {:<35}",
+                "PORT", "STATE", "SERVICE", "VERSION"
             );
             println!("{}", "-".repeat(93));
             for e in &display {
                 println!(
-                    "{:<10} {:<10} {:<13} {:<22} {:<35}",
+                    "{:<10} {:<10} {:<22} {:<35}",
                     format!("{}/{}", e.port, e.protocol),
                     e.state,
-                    fmt_duration(e.latency_ms, args.precise),
                     e.service.as_deref().unwrap_or("unknown"),
                     e.version.as_deref().unwrap_or(""),
                 );
             }
         } else {
-            println!(
-                "{:<10} {:<10} {:<13} {}",
-                "PORT", "STATE", "LATENCY", "SERVICE"
-            );
+            println!("{:<10} {:<10} {}", "PORT", "STATE", "SERVICE");
             println!("{}", "-".repeat(50));
             for e in &display {
                 println!(
-                    "{:<10} {:<10} {:<13} {}",
+                    "{:<10} {:<10} {}",
                     format!("{}/{}", e.port, e.protocol),
                     e.state,
-                    fmt_duration(e.latency_ms, args.precise),
                     e.service.as_deref().unwrap_or("unknown"),
                 );
             }
