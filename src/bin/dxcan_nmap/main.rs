@@ -3,81 +3,15 @@
 //! Wraps Nmap cleanly: builds args, runs the process, parses XML output,
 //! and emits dxcan's standard JSON or plain-text format.
 
+mod cli;
 mod nmap_runner;
 mod nmap_xml;
 mod output;
 
 use clap::Parser;
+use cli::Args;
 use output::{PortEntry, ScanOutput};
 use std::time::Instant;
-
-// ---------------------------------------------------------------------------
-// CLI
-// ---------------------------------------------------------------------------
-
-#[derive(Parser)]
-#[command(
-    name = "dxcan-nmap",
-    about = "dxcan Nmap-backed scanner — wraps Nmap, emits dxcan JSON/text output.",
-    version
-)]
-struct Args {
-    /// Target host (IP address or hostname)
-    #[arg(short = 'H', long)]
-    host: String,
-
-    /// Ports: single (22,80), range (1-1024), mixed (22,8000-9000), or - for all
-    #[arg(short, long, default_value = "1-65535")]
-    ports: String,
-
-    /// Enable OS detection (requires root / CAP_NET_RAW)
-    #[arg(long)]
-    os: bool,
-
-    /// Enable service version detection (-sV) — produces VERSION and CONFIDENCE columns
-    #[arg(long = "service-version", short = 's', alias = "sv")]
-    service_version: bool,
-
-    /// Nmap timing template T0–T5 (default: 4)
-    #[arg(long, default_value_t = 4)]
-    timing: u8,
-
-    /// Service version detection intensity 0–9 (default: 5, only used with --service-version)
-    #[arg(long, default_value_t = 5)]
-    intensity: u8,
-
-    /// Overall scan timeout in seconds (default: 300)
-    #[arg(long, default_value_t = 300)]
-    scan_timeout: u64,
-
-    /// Output structured JSON
-    #[arg(short, long)]
-    json: bool,
-
-    /// Show full latency precision in plain text output
-    #[arg(long)]
-    precise: bool,
-
-    /// Show closed and filtered ports too (default: open only)
-    #[arg(long)]
-    all: bool,
-
-    /// Show debug timing summary
-    #[arg(long)]
-    debug: bool,
-
-    /// Print the Nmap command that would be run, then exit
-    #[arg(long)]
-    dry_run: bool,
-
-    /// Pass extra args verbatim to Nmap (after --)
-    #[arg(last = true)]
-    extra: Vec<String>,
-}
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() {

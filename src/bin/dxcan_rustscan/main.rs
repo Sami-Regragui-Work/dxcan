@@ -4,86 +4,16 @@
 //!   1. RustScan — fast port discovery
 //!   2. Nmap     — service/version/OS detection on discovered ports only
 
+mod cli;
 mod nmap_runner;
 mod nmap_xml;
 mod output;
 mod rustscan_runner;
 
 use clap::Parser;
+use cli::Args;
 use output::{PortEntry, ScanOutput};
 use std::time::Instant;
-
-// ---------------------------------------------------------------------------
-// CLI
-// ---------------------------------------------------------------------------
-
-#[derive(Parser)]
-#[command(
-    name = "dxcan-rustscan",
-    about = "dxcan RustScan-backed scanner — fast port discovery then Nmap service detection.",
-    version
-)]
-struct Args {
-    /// Target host (IP address or hostname)
-    #[arg(short = 'H', long)]
-    host: String,
-
-    /// Ports: single (22,80), range (1-1024), or - for all 65535
-    #[arg(short, long, default_value = "1-65535")]
-    ports: String,
-
-    /// Enable OS detection (requires root / CAP_NET_RAW)
-    #[arg(long)]
-    os: bool,
-
-    /// Enable service version detection (-sV) — produces VERSION column
-    #[arg(long = "service-version", short = 's', alias = "sv")]
-    service_version: bool,
-
-    /// RustScan batch size — sockets opened per cycle (default: 5000)
-    #[arg(long, default_value_t = 5000)]
-    batch_size: u16,
-
-    /// RustScan timeout per port in ms (default: 1500)
-    #[arg(long, default_value_t = 1500)]
-    rs_timeout: u32,
-
-    /// Nmap timing template T0–T5 for the service scan phase (default: 4)
-    #[arg(long, default_value_t = 4)]
-    timing: u8,
-
-    /// Service version detection intensity 0–9 (default: 5, only used with --service-version)
-    #[arg(long, default_value_t = 5)]
-    intensity: u8,
-
-    /// Overall scan timeout in seconds (default: 300)
-    #[arg(long, default_value_t = 300)]
-    scan_timeout: u64,
-
-    /// Output structured JSON
-    #[arg(short, long)]
-    json: bool,
-
-    /// Show full latency precision in plain text output
-    #[arg(long)]
-    precise: bool,
-
-    /// Show debug timing summary
-    #[arg(long)]
-    debug: bool,
-
-    /// Print the commands that would be run, then exit
-    #[arg(long)]
-    dry_run: bool,
-
-    /// Pass extra args verbatim to Nmap (after --)
-    #[arg(last = true)]
-    extra: Vec<String>,
-}
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() {
