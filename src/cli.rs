@@ -7,40 +7,39 @@ use clap::Parser;
     version
 )]
 pub struct Args {
-    /// Target host (IP address or hostname)
     #[arg(short = 'H', long)]
     pub host: String,
 
-    /// Ports: single (22,80), range (1-1024), mixed (22,8000-9000)
     #[arg(short, long)]
     pub ports: String,
 
-    /// Initial per-port TCP timeout in seconds (adapts downward at runtime)
     #[arg(short, long, default_value_t = 0.5)]
     pub timeout: f64,
 
-    /// Maximum concurrent connections
     #[arg(short, long, default_value_t = 500)]
     pub workers: usize,
 
-    /// Enable service version detection — banner grab + active probe
-    /// (equivalent to nmap -sV; slower but produces VERSION and CONFIDENCE)
     #[arg(long = "service-version", short = 's', alias = "sv")]
     pub service_version: bool,
 
-    /// Output structured JSON
+    #[arg(long = "reverse-dns")]
+    pub reverse_dns: bool,
+
+    #[arg(long = "role-labels")]
+    pub role_labels: bool,
+
+    #[arg(long)]
+    pub rich: bool,
+
     #[arg(short, long)]
     pub json: bool,
 
-    /// Show full latency precision in plain text output
     #[arg(long)]
     pub precise: bool,
 
-    /// Show closed and filtered ports (default: open only)
     #[arg(long)]
     pub all: bool,
 
-    /// Show debug summary: per-phase timing breakdown after the table
     #[arg(long)]
     pub debug: bool,
 }

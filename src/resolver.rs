@@ -11,3 +11,11 @@ pub async fn resolve_host(host: &str) -> Result<IpAddr, String> {
         .map(|a| a.ip())
         .ok_or_else(|| format!("No addresses found for '{host}'"))
 }
+
+pub async fn reverse_dns(ip: IpAddr) -> Option<String> {
+    let ip = ip;
+    tokio::task::spawn_blocking(move || dns_lookup::lookup_addr(&ip).ok())
+        .await
+        .ok()
+        .flatten()
+}

@@ -1,6 +1,5 @@
-//! dxcan 0.5.0 — DXC platform entry point (native TCP scanner)
-
 mod cli;
+mod display;
 mod output;
 mod resolver;
 mod scanners;
@@ -13,13 +12,14 @@ use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
 use cli::Args;
+use display::{print_open_ports_summary, print_port_table, DisplayOpts};
 use output::{PortEntry, ScanOutput};
-use resolver::resolve_host;
+use resolver::{resolve_host, reverse_dns};
 use scanners::network::port::PortResult;
 use scanners::network::{
     port::{parse_ports, scan_port},
     rtt::RttTracker,
-    service::{port_label, ServiceProber},
+    service::{port_label, service_role_label, ServiceProber},
 };
 
 #[tokio::main(flavor = "current_thread")]
@@ -27,6 +27,9 @@ async fn main() {
     let t0 = Instant::now();
 
     let args = Args::parse();
+    let service_version = args.service_version || args.rich;
+    let do_reverse_dns = args.reverse_dns || args.rich;
+    let role_labels = args.role_labels || args.rich;
 
     let ip = match resolve_host(&args.host).await {
         Ok(ip) => ip,
@@ -34,6 +37,12 @@ async fn main() {
             eprintln!("[error] {e}");
             std::process::exit(1);
         }
+    };
+
+    let reverse_name = if do_reverse_dns {
+        reverse_dns(ip).await
+    } else {
+        None
     };
 
     let ports = parse_ports(&args.ports);
@@ -48,7 +57,6 @@ async fn main() {
     let base_dur = Duration::from_secs_f64(args.timeout);
     let rtt = Arc::new(Mutex::new(RttTracker::new(args.timeout * 1000.0)));
 
-    // ── Phase 1: port scan ────────────────────────────────────────────────
     let scan_start = Instant::now();
 
     let mut futs = FuturesUnordered::new();
@@ -66,10 +74,6 @@ async fn main() {
 
     let open_ports: Vec<&PortResult> = results.iter().filter(|r| r.state == "open").collect();
 
-    // ── Phase 2: service detection (optional) ─────────────────────────────
-    // Default: pure port-number → service name lookup (zero extra connections)
-    // --service-version: full 3-layer banner probe (produces version + confidence)
-
     let max_rtt_ms = open_ports
         .iter()
         .map(|r| r.latency_ms)
@@ -79,16 +83,16 @@ async fn main() {
     let service_passive_ms = ((max_rtt_ms * 10.0).max(20.0).min(500.0)) as u64;
     let service_active_ms = service_passive_ms;
 
-    // service map: port → (service_name, version, banner_raw, confidence, detection_ms)
     struct ServiceInfo {
         service: String,
         version: Option<String>,
         banner_raw: Option<String>,
         confidence: Option<String>,
+        role: Option<String>,
         detection_ms: f64,
     }
 
-    let services: HashMap<u16, ServiceInfo> = if args.service_version {
+    let services: HashMap<u16, ServiceInfo> = if service_version {
         let service_start = Instant::now();
         let prober = ServiceProber::new(service_passive_ms, service_active_ms);
 
@@ -99,6 +103,11 @@ async fn main() {
 
         let mut map = HashMap::new();
         while let Some(s) = sfuts.next().await {
+            let role = if role_labels {
+                service_role_label(&s.service).map(str::to_string)
+            } else {
+                None
+            };
             map.insert(
                 s.port,
                 ServiceInfo {
@@ -106,6 +115,7 @@ async fn main() {
                     version: s.version,
                     banner_raw: s.banner_raw,
                     confidence: Some(s.confidence.to_string()),
+                    role,
                     detection_ms: s.detection_ms,
                 },
             );
@@ -113,12 +123,16 @@ async fn main() {
         service_ms = service_start.elapsed().as_secs_f64() * 1000.0;
         map
     } else {
-        // Fast path: table lookup only, no connections
         service_ms = 0.0;
         open_ports
             .iter()
             .map(|r| {
                 let name = port_label(r.port).unwrap_or("unknown").to_string();
+                let role = if role_labels {
+                    service_role_label(&name).map(str::to_string)
+                } else {
+                    None
+                };
                 (
                     r.port,
                     ServiceInfo {
@@ -126,6 +140,7 @@ async fn main() {
                         version: None,
                         banner_raw: None,
                         confidence: None,
+                        role,
                         detection_ms: 0.0,
                     },
                 )
@@ -135,7 +150,6 @@ async fn main() {
 
     let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-    // ── Build display entries ─────────────────────────────────────────────
     let display: Vec<PortEntry> = results
         .iter()
         .filter(|r| args.all || r.state == "open")
@@ -148,36 +162,41 @@ async fn main() {
                 state: r.state.clone(),
                 latency_ms: total_latency,
                 service: svc.map(|s| s.service.clone()),
-                version: if args.service_version {
+                version: if service_version {
                     svc.and_then(|s| s.version.clone())
                 } else {
                     None
                 },
-                banner_raw: if args.service_version {
+                banner_raw: if service_version {
                     svc.and_then(|s| s.banner_raw.clone())
                 } else {
                     None
                 },
-                confidence: if args.service_version {
+                confidence: if service_version {
                     svc.and_then(|s| s.confidence.clone())
                 } else {
                     None
                 },
+                role: svc.and_then(|s| s.role.clone()),
                 error: r.error.clone(),
             }
         })
         .collect();
 
-    // ── Output ────────────────────────────────────────────────────────────
+    let open_entries: Vec<&PortEntry> = display.iter().filter(|e| e.state == "open").collect();
+    let info_level = compute_info_level(&open_entries, reverse_name.is_some());
+
     if args.json {
         let output = ScanOutput {
             tool: "dxcan".into(),
             host: args.host.clone(),
             ip: ip.to_string(),
+            reverse_dns: reverse_name.clone(),
             elapsed_ms: wall_ms,
             scanned: total,
             shown: display.len(),
             results: display,
+            info_level,
             os_guess: None,
         };
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
@@ -187,72 +206,59 @@ async fn main() {
         } else {
             println!("dxcan scan report for {}", args.host);
         }
+        if let Some(ref name) = reverse_name {
+            println!("Reverse-DNS: {name}");
+        }
         println!("Scanned {total} ports\n");
 
-        if args.service_version {
-            // Wide table: PORT STATE LATENCY SERVICE VERSION CONFIDENCE
-            println!(
-                "{:<10} {:<10} {:<13} {:<22} {:<42} {}",
-                "PORT", "STATE", "LATENCY", "SERVICE", "VERSION", "CONFIDENCE"
-            );
-            println!("{}", "-".repeat(113));
-            for e in &display {
-                println!(
-                    "{:<10} {:<10} {:<13} {:<22} {:<42} [{}]",
-                    format!("{}/{}", e.port, e.protocol),
-                    e.state,
-                    fmt_duration(e.latency_ms, args.precise),
-                    e.service.as_deref().unwrap_or("unknown"),
-                    e.version.as_deref().unwrap_or(""),
-                    e.confidence.as_deref().unwrap_or(""),
-                );
-            }
-        } else {
-            // Default table: PORT STATE LATENCY SERVICE
-            println!(
-                "{:<10} {:<10} {:<13} {}",
-                "PORT", "STATE", "LATENCY", "SERVICE"
-            );
-            println!("{}", "-".repeat(50));
-            for e in &display {
-                println!(
-                    "{:<10} {:<10} {:<13} {}",
-                    format!("{}/{}", e.port, e.protocol),
-                    e.state,
-                    fmt_duration(e.latency_ms, args.precise),
-                    e.service.as_deref().unwrap_or("unknown"),
-                );
-            }
+        let table_opts = DisplayOpts {
+            service_version,
+            role_labels,
+            precise: args.precise,
+        };
+        print_port_table(&display, &table_opts);
+
+        if args.all {
+            print_open_ports_summary(&display);
         }
 
         println!(
-            "\n{} shown — scanned in {}",
+            "\n{} shown — scanned in {} (info_level={info_level})",
             display.len(),
-            fmt_duration(wall_ms, args.precise)
+            display::fmt_duration(wall_ms, args.precise)
         );
 
-        // ── Debug block ───────────────────────────────────────────────────
         if args.debug {
             println!("\n--- debug ---");
-            println!("connect total:   {}", fmt_duration(scan_ms, true));
-            if args.service_version {
-                println!("service total:   {}", fmt_duration(service_ms, true));
+            println!("connect total:   {}", display::fmt_duration(scan_ms, true));
+            if service_version {
+                println!("service total:   {}", display::fmt_duration(service_ms, true));
                 println!(
                     "service timeout: passive={}ms  active={}ms  (derived from max RTT {:.2}ms)",
                     service_passive_ms, service_active_ms, max_rtt_ms
                 );
             }
-            println!("wall total:      {}", fmt_duration(wall_ms, true));
+            println!("wall total:      {}", display::fmt_duration(wall_ms, true));
         }
     }
 }
 
-fn fmt_duration(ms: f64, precise: bool) -> String {
-    if precise {
-        format!("{ms:.3}ms")
-    } else if ms >= 1000.0 {
-        format!("{:.2}s", ms / 1000.0)
-    } else {
-        format!("{ms:.1}ms")
+fn compute_info_level(open_entries: &[&PortEntry], has_reverse_dns: bool) -> u32 {
+    let mut info_level = open_entries.len() as u32;
+    if has_reverse_dns {
+        info_level += 1;
     }
+    for e in open_entries {
+        if e.version.is_some() {
+            info_level += 1;
+        } else if e.banner_raw.is_some() {
+            info_level += 1;
+        }
+        if e.role.is_some() {
+            info_level += 1;
+        } else if e.service.as_deref().is_some_and(|s| s != "unknown") {
+            info_level += 1;
+        }
+    }
+    info_level
 }

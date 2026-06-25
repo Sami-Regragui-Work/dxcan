@@ -467,6 +467,22 @@ fn sanitise_banner(banner: &[u8]) -> String {
 // Well-known port labels (Layer 3 fallback)
 // ---------------------------------------------------------------------------
 
+pub fn service_role_label(service: &str) -> Option<&'static str> {
+    match service {
+        "ssh" => Some("An ssh server is running on this port"),
+        "http" | "https" | "http-alt" | "https-alt" => {
+            Some("A web server is running on this port")
+        }
+        "ftp" => Some("An ftp server is running on this port"),
+        "smtp" | "smtp-submission" | "smtps" => Some("An smtp server is running on this port"),
+        "pop3" | "pop3s" | "imap" | "imaps" => Some("A mail server is running on this port"),
+        "mysql" | "postgresql" | "mssql" | "mongodb" | "redis" => {
+            Some("A database server is running on this port")
+        }
+        _ => None,
+    }
+}
+
 pub fn port_label(port: u16) -> Option<&'static str> {
     match port {
         21 => Some("ftp"),

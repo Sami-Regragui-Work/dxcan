@@ -1,6 +1,6 @@
 [package]
 name    = "dxcan"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 
 [[bin]]
@@ -23,3 +23,4 @@ futures    = "0.3"
 tokio      = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "process"] }
 quick-xml  = { version = "0.40", features = ["serialize"] }
 regex      = "1"
+dns-lookup = "2"
