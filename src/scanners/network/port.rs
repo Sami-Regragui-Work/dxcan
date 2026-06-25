@@ -52,11 +52,13 @@ pub async fn scan_port(
 
     let dur = {
         let tracker = rtt.lock().unwrap();
-        tracker
+        let cap = base_dur;
+        let floor = Duration::from_secs_f64(base_dur.as_secs_f64() * 0.25);
+        let chosen = tracker
             .timeout_ms()
             .map(|ms| Duration::from_secs_f64(ms / 1000.0))
-            .unwrap_or(base_dur)
-            .min(base_dur)
+            .unwrap_or(base_dur);
+        chosen.max(floor).min(cap)
     };
 
     let addr = SocketAddr::new(ip, port);
