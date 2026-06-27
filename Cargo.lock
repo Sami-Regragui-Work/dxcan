@@ -133,11 +133,12 @@ dependencies = [
 
 [[package]]
 name = "dxcan"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "clap",
  "dns-lookup",
  "futures",
+ "libc",
  "quick-xml",
  "regex",
  "serde",

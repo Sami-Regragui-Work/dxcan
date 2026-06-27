@@ -34,4 +34,6 @@ pub struct ScanOutput {
     pub info_level: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub os_guess:   Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_accuracy: Option<u8>,
 }
