@@ -2,3 +2,7 @@
 !src
 !src/**
 !Cargo.*
+!.gitignore
+!/README.md
+/assets
+/assets/**
