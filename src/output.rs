@@ -34,4 +34,18 @@ pub struct ScanOutput {
     pub info_level: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub os_guess:   Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_accuracy: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_vendor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_gen: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_device_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_running: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub os_cpes: Vec<String>,
 }

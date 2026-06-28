@@ -12,11 +12,12 @@ use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
 use cli::Args;
-use display::{print_open_ports_summary, print_port_table, DisplayOpts};
+use display::{print_open_ports_summary, print_os_details, print_port_table, DisplayOpts};
 use output::{PortEntry, ScanOutput};
 use resolver::{resolve_host, reverse_dns};
 use scanners::network::port::PortResult;
 use scanners::network::{
+    os::detect_os,
     port::{parse_ports, scan_port},
     rtt::RttTracker,
     service::{port_label, service_role_label, ServiceProber},
@@ -148,6 +149,33 @@ async fn main() {
             .collect()
     };
 
+    let open_port_nums: Vec<u16> = open_ports.iter().map(|r| r.port).collect();
+
+    let os_ms;
+    let os_guess;
+    let os_accuracy;
+    let os_details;
+    if args.os_detect {
+        let os_timeout = ((max_rtt_ms * 20.0).max(500.0).min(3000.0)) as u64;
+        match detect_os(ip, &open_port_nums, os_timeout) {
+            Ok(r) => {
+                os_ms = r.detection_ms;
+                os_guess = r.guess;
+                os_accuracy = r.accuracy;
+                os_details = r.details;
+            }
+            Err(e) => {
+                eprintln!("[error] {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        os_ms = 0.0;
+        os_guess = None;
+        os_accuracy = None;
+        os_details = Default::default();
+    }
+
     let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     let display: Vec<PortEntry> = results
@@ -184,9 +212,31 @@ async fn main() {
         .collect();
 
     let open_entries: Vec<&PortEntry> = display.iter().filter(|e| e.state == "open").collect();
-    let info_level = compute_info_level(&open_entries, reverse_name.is_some());
+    let mut info_level = compute_info_level(&open_entries, reverse_name.is_some());
+    if os_guess.is_some() {
+        info_level += 1;
+        if os_accuracy.is_some_and(|a| a >= 90) {
+            info_level += 1;
+        }
+        if os_details.device_type.is_some() || !os_details.cpes.is_empty() {
+            info_level += 1;
+        }
+    }
+
+    let os_label = os_guess
+        .as_deref()
+        .unwrap_or("no match");
 
     if args.json {
+        let (json_os_guess, json_os_accuracy, json_os_details) = if args.os_detect {
+            (
+                Some(os_label.to_string()),
+                os_accuracy,
+                Some(&os_details),
+            )
+        } else {
+            (None, None, None)
+        };
         let output = ScanOutput {
             tool: "dxcan".into(),
             host: args.host.clone(),
@@ -197,7 +247,14 @@ async fn main() {
             shown: display.len(),
             results: display,
             info_level,
-            os_guess: None,
+            os_guess: json_os_guess,
+            os_accuracy: json_os_accuracy,
+            os_vendor: json_os_details.and_then(|d| d.vendor.clone()),
+            os_family: json_os_details.and_then(|d| d.os_family.clone()),
+            os_gen: json_os_details.and_then(|d| d.os_gen.clone()),
+            os_device_type: json_os_details.and_then(|d| d.device_type.clone()),
+            os_running: json_os_details.and_then(|d| d.running.clone()),
+            os_cpes: json_os_details.map(|d| d.cpes.clone()).unwrap_or_default(),
         };
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     } else {
@@ -215,8 +272,17 @@ async fn main() {
             service_version,
             role_labels,
             precise: args.precise,
+            os: if args.os_detect {
+                Some((os_label.to_string(), os_accuracy))
+            } else {
+                None
+            },
         };
         print_port_table(&display, &table_opts);
+
+        if args.os_detect && os_guess.is_some() {
+            print_os_details(os_label, os_accuracy, &os_details);
+        }
 
         if args.all {
             print_open_ports_summary(&display);
@@ -232,11 +298,17 @@ async fn main() {
             println!("\n--- debug ---");
             println!("connect total:   {}", display::fmt_duration(scan_ms, true));
             if service_version {
-                println!("service total:   {}", display::fmt_duration(service_ms, true));
+                println!(
+                    "service total:   {}",
+                    display::fmt_duration(service_ms, true)
+                );
                 println!(
                     "service timeout: passive={}ms  active={}ms  (derived from max RTT {:.2}ms)",
                     service_passive_ms, service_active_ms, max_rtt_ms
                 );
+            }
+            if args.os_detect {
+                println!("os total:        {}", display::fmt_duration(os_ms, true));
             }
             println!("wall total:      {}", display::fmt_duration(wall_ms, true));
         }

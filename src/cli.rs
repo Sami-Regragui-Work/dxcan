@@ -28,6 +28,9 @@ pub struct Args {
     #[arg(long = "role-labels")]
     pub role_labels: bool,
 
+    #[arg(long = "os", short = 'O')]
+    pub os_detect: bool,
+
     #[arg(long)]
     pub rich: bool,
 

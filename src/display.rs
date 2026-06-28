@@ -4,6 +4,7 @@ pub struct DisplayOpts {
     pub service_version: bool,
     pub role_labels: bool,
     pub precise: bool,
+    pub os: Option<(String, Option<u8>)>,
 }
 
 pub fn print_port_table(entries: &[PortEntry], opts: &DisplayOpts) {
@@ -14,14 +15,49 @@ pub fn print_port_table(entries: &[PortEntry], opts: &DisplayOpts) {
         ("SERVICE", 12),
     ];
     if opts.service_version {
-        cols.push(("VERSION", 36));
+        let version_w = entries
+            .iter()
+            .map(|e| e.version.as_deref().unwrap_or("").len())
+            .max()
+            .unwrap_or(0)
+            .max("VERSION".len())
+            .min(80);
+        cols.push(("VERSION", version_w));
     }
     if opts.role_labels {
-        cols.push(("ROLE", 42));
+        let role_w = entries
+            .iter()
+            .map(|e| e.role.as_deref().unwrap_or("").len())
+            .max()
+            .unwrap_or(0)
+            .max("ROLE".len())
+            .min(80);
+        cols.push(("ROLE", role_w));
     }
     if opts.service_version {
         cols.push(("CONFIDENCE", 12));
     }
+    let os_acc_str = opts
+        .os
+        .as_ref()
+        .and_then(|(_, acc)| acc.map(|a| format!("{a}%")))
+        .unwrap_or_else(|| "—".to_string());
+    if opts.os.is_some() {
+        let os_w = opts
+            .os
+            .as_ref()
+            .map(|(g, _)| g.len())
+            .unwrap_or(0)
+            .max("OS".len())
+            .min(80);
+        cols.push(("OS", os_w));
+        cols.push(("ACCURACY", os_acc_str.len().max("ACCURACY".len()).max(8)));
+    }
+
+    let os_row = opts
+        .os
+        .as_ref()
+        .and_then(|_| entries.iter().position(|e| e.state == "open"));
 
     let header: String = cols
         .iter()
@@ -32,7 +68,7 @@ pub fn print_port_table(entries: &[PortEntry], opts: &DisplayOpts) {
     println!("{header}");
     println!("{}", "-".repeat(width));
 
-    for e in entries {
+    for (idx, e) in entries.iter().enumerate() {
         let mut fields: Vec<String> = vec![
             format!("{}/{}", e.port, e.protocol),
             e.state.clone(),
@@ -48,6 +84,20 @@ pub fn print_port_table(entries: &[PortEntry], opts: &DisplayOpts) {
         if opts.service_version {
             fields.push(e.confidence.as_deref().unwrap_or("").to_string());
         }
+        if opts.os.is_some() {
+            if os_row == Some(idx) {
+                let (guess, accuracy) = opts.os.as_ref().unwrap();
+                fields.push(guess.clone());
+                fields.push(
+                    accuracy
+                        .map(|a| format!("{a}%"))
+                        .unwrap_or_else(|| "—".to_string()),
+                );
+            } else {
+                fields.push(String::new());
+                fields.push(String::new());
+            }
+        }
 
         let row: String = fields
             .iter()
@@ -56,6 +106,34 @@ pub fn print_port_table(entries: &[PortEntry], opts: &DisplayOpts) {
             .collect::<Vec<_>>()
             .join(" ");
         println!("{row}");
+    }
+}
+
+use crate::scanners::network::os::OsMatchDetails;
+
+pub fn print_os_details(guess: &str, accuracy: Option<u8>, details: &OsMatchDetails) {
+    let acc = accuracy
+        .map(|a| format!(" ({a}%)"))
+        .unwrap_or_default();
+    println!("\nOS details: {guess}{acc}");
+    if let Some(running) = &details.running {
+        println!("Running: {running}");
+    } else {
+        if let Some(family) = &details.os_family {
+            println!("OS family: {family}");
+        }
+        if let Some(gen) = &details.os_gen {
+            println!("OS generation: {gen}");
+        }
+    }
+    if let Some(vendor) = &details.vendor {
+        println!("OS vendor: {vendor}");
+    }
+    if let Some(device) = &details.device_type {
+        println!("Device type: {device}");
+    }
+    for cpe in &details.cpes {
+        println!("OS CPE: {cpe}");
     }
 }
 
