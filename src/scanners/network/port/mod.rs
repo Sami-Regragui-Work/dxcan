@@ -1,3 +1,9 @@
+mod rtt;
+mod scan;
+mod syn;
+
+pub use scan::{run_port_scan, scan_mode, ScanPlan};
+
 use std::collections::BTreeSet;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -6,7 +12,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
-use crate::scanners::network::rtt::RttTracker;
+use self::rtt::RttTracker;
 
 #[derive(Debug, Clone)]
 pub struct PortResult {

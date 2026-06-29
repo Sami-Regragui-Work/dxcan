@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::scanners::network::os::packet::build_tcp_packet;
 use crate::scanners::network::os::probes::{TH_ACK, TH_RST, TH_SYN};
-use crate::scanners::network::port::PortResult;
+use super::PortResult;
 
 const SEND_BATCH: usize = 512;
 const IDLE_EXIT_MS: u64 = 80;

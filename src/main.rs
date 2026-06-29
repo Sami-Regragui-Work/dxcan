@@ -15,8 +15,7 @@ use display::{
 };
 use output::{PortEntry, ScanOutput, VhostEntry};
 use resolver::{resolve_host, reverse_dns};
-use scanners::network::port::PortResult;
-use scanners::network::scan::{run_port_scan, scan_mode, ScanPlan};
+use scanners::network::port::{parse_ports, run_port_scan, scan_mode, PortResult, ScanPlan};
 use scanners::network::{
     os::detect_os,
     service::{port_label, product_hint_from_banner, service_role_label, ServiceProber},
@@ -61,7 +60,7 @@ async fn main() {
         None
     };
 
-    let ports = scanners::network::port::parse_ports(&args.ports);
+    let ports = parse_ports(&args.ports);
     if ports.is_empty() {
         eprintln!("[error] No valid ports in range 1-65535.");
         std::process::exit(1);

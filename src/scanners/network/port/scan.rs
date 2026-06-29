@@ -5,10 +5,10 @@ use std::time::Duration;
 use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::Semaphore;
 
-use super::os::has_raw_privileges;
-use super::port::{scan_port_full, scan_port_open_only, PortProbeOutcome, PortResult};
+use crate::scanners::network::os::has_raw_privileges;
+use super::{scan_port_full, scan_port_open_only, PortProbeOutcome, PortResult};
 use super::rtt::RttTracker;
-use super::syn_scan::{self, SynScanGoal, SynScanOutput};
+use super::syn::{self, SynScanGoal, SynScanOutput};
 use crate::cli::{ScanMethod, ScanMode};
 
 pub struct ScanPlan {
@@ -102,7 +102,7 @@ pub async fn run_port_scan(
             let SynScanOutput {
                 results,
                 closed_samples,
-            } = syn_scan::scan(v4, ports, timeout_secs, 0.0, syn_goal)?;
+            } = syn::scan(v4, ports, timeout_secs, 0.0, syn_goal)?;
             let label = if plan.mode == ScanMode::Full {
                 "syn (full)"
             } else {
