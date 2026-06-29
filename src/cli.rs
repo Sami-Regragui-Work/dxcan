@@ -50,8 +50,14 @@ pub struct Args {
     #[arg(long = "os", short = 'O')]
     pub os_detect: bool,
 
-    #[arg(long)]
-    pub rich: bool,
+    #[arg(long = "product-hints")]
+    pub product_hints: bool,
+
+    #[arg(long = "os-rich")]
+    pub os_rich: bool,
+
+    #[arg(long = "sv-rich")]
+    pub sv_rich: bool,
 
     #[arg(short, long)]
     pub json: bool,

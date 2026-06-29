@@ -467,6 +467,30 @@ fn sanitise_banner(banner: &[u8]) -> String {
 // Well-known port labels (Layer 3 fallback)
 // ---------------------------------------------------------------------------
 
+pub fn product_hint_from_banner(port: u16, text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_lowercase();
+    if lower.contains("ubuntu") {
+        return Some(format!("{port}/tcp Ubuntu ({trimmed})"));
+    }
+    if lower.contains("debian") {
+        return Some(format!("{port}/tcp Debian ({trimmed})"));
+    }
+    if lower.contains("centos") || lower.contains("red hat") || lower.contains("rhel") {
+        return Some(format!("{port}/tcp Linux ({trimmed})"));
+    }
+    if lower.starts_with("ssh-") {
+        return Some(format!("{port}/tcp {trimmed}"));
+    }
+    if lower.starts_with("server:") || lower.contains("apache") || lower.contains("nginx") {
+        return Some(format!("{port}/tcp {trimmed}"));
+    }
+    None
+}
+
 pub fn service_role_label(service: &str) -> Option<&'static str> {
     match service {
         "ssh" => Some("An ssh server is running on this port"),

@@ -6,23 +6,13 @@ Rust port scanner with optional service detection, role labels, and nmap-style O
 
 - Rust toolchain (`cargo`, edition 2021)
 - Linux with raw sockets for SYN scans and `--os` (run with `sudo` or `CAP_NET_RAW`)
-- **OS database file** for `--os` (see below)
+- **[Nmap](https://nmap.org/)** installed — provides `/usr/share/nmap/nmap-os-db`, used at build time and for `--os` at runtime
 
-## Get the OS fingerprint database
-
-The nmap OS fingerprint database (`assets/nmap-os-db`, ~5 MB) is **not** on code branches. It lives on branch **`assets-bundle`**, which tracks **only** the `assets/` tree (orphan branch — not meant to merge into `main`).
-
-After cloning, from your code branch (e.g. `main`):
+Optional override:
 
 ```bash
-git checkout main && git fetch origin assets-bundle && mkdir -p assets && git show origin/assets-bundle:assets/nmap-os-db > assets/nmap-os-db && git show origin/assets-bundle:assets/README.md > assets/README.md
+export DXCAN_OS_DB=/path/to/nmap-os-db
 ```
-
-Do **not** merge or pull `assets-bundle` into `main`. The one-liner above copies files locally without staging them, so you won't accidentally commit assets to `main`.
-
-Without `assets/nmap-os-db`, `cargo build` fails on the OS module and `dxcan --os` is unavailable.
-
-**Important:** On code branches, git does not keep these files in your working tree. After switching branches, run the one-liner again if `assets/` is missing.
 
 ## Build and install
 
@@ -30,6 +20,8 @@ Without `assets/nmap-os-db`, `cargo build` fails on the OS module and `dxcan --o
 cargo build --release
 cargo install --path . --force
 ```
+
+Build embeds a snapshot of the nmap OS database from the paths above. At runtime, dxcan prefers the live file on disk (so upgrading nmap updates fingerprints without rebuilding).
 
 Use the built binary without installing globally:
 
@@ -71,17 +63,37 @@ Service versions:
 dxcan -H scanme.nmap.org -p 22,80 --service-version
 ```
 
-OS detection (requires `assets/nmap-os-db` and root):
+OS detection (requires nmap OS database and root). Text output uses an nmap-style block after the port table (`Device type:` / `Running:` / `OS CPE:` / `OS details:` / `OS match accuracy:`):
 
 ```bash
 sudo dxcan -H scanme.nmap.org -p 22,80 --os
 ```
 
-Rich output (reverse DNS, versions, role labels):
+OS with banner-based product hints (compare to OpenVAS-style distro lines):
 
 ```bash
-dxcan -H scanme.nmap.org -p 1-1024 --rich
+sudo dxcan -H scanme.nmap.org -p 22,80 --os --product-hints
+sudo dxcan -H scanme.nmap.org -p 22,80 --os-rich
 ```
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--os` / `-O` | off | TCP/IP OS fingerprint only (no banner grab) |
+| `--product-hints` | off | After `--os`, add `Product hint:` lines from service banners |
+| `--os-rich` | off | Shorthand for `--os --product-hints` |
+
+Service-rich output (versions, reverse DNS, role labels):
+
+```bash
+dxcan -H scanme.nmap.org -p 1-1024 --sv-rich
+```
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--service-version` / `-s` | off | Probe open ports for service banners and versions |
+| `--reverse-dns` | off | PTR lookup on the target IP |
+| `--role-labels` | off | Heuristic role tags on known services |
+| `--sv-rich` | off | Shorthand for `--service-version --reverse-dns --role-labels` |
 
 JSON:
 
@@ -100,10 +112,3 @@ dxcan -H scanme.nmap.org -p 22,80 --service-version --json
 ## Benchmarks (local checkout)
 
 Benchmark scripts under `bench/` and docs under `references/` are kept in the working tree but are not part of the minimal git export. If you have them locally, see `references/how-to-use.md` for `bench/doc.sh`, preflight, and OpenVAS wake workflows.
-
-## Branches
-
-| Branch | Contents |
-|--------|----------|
-| `main` / feature branches | Rust source, `Cargo.toml`, this README |
-| `assets-bundle` | **Assets only** — `assets/nmap-os-db` + `assets/README.md` (orphan; sparse-checkout into code branches) |

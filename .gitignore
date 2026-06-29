@@ -1,8 +1,7 @@
 *
 !src
 !src/**
+!build.rs
 !Cargo.*
 !.gitignore
 !/README.md
-/assets
-/assets/**

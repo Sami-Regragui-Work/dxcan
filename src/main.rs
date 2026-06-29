@@ -17,17 +17,32 @@ use scanners::network::port::PortResult;
 use scanners::network::scan::{run_port_scan, scan_mode, ScanPlan};
 use scanners::network::{
     os::detect_os,
-    service::{port_label, service_role_label, ServiceProber},
+    service::{port_label, product_hint_from_banner, service_role_label, ServiceProber},
 };
+
+struct ServiceInfo {
+    service: String,
+    version: Option<String>,
+    banner_raw: Option<String>,
+    confidence: Option<String>,
+    role: Option<String>,
+    detection_ms: f64,
+}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let t0 = Instant::now();
 
     let args = Args::parse();
-    let service_version = args.service_version || args.rich;
-    let do_reverse_dns = args.reverse_dns || args.rich;
-    let role_labels = args.role_labels || args.rich;
+    if args.product_hints && !args.os_detect && !args.os_rich {
+        eprintln!("[error] --product-hints requires --os (or use --os-rich)");
+        std::process::exit(1);
+    }
+    let os_detect = args.os_detect || args.os_rich;
+    let product_hints = args.product_hints || args.os_rich;
+    let service_version = args.service_version || args.sv_rich;
+    let do_reverse_dns = args.reverse_dns || args.sv_rich;
+    let role_labels = args.role_labels || args.sv_rich;
 
     let ip = match resolve_host(&args.host).await {
         Ok(ip) => ip,
@@ -55,7 +70,7 @@ async fn main() {
         mode,
         method: args.scan_method,
         verify: args.verify,
-        reliable_opens: args.os_detect,
+        reliable_opens: os_detect,
     };
 
     let scan_start = Instant::now();
@@ -75,19 +90,11 @@ async fn main() {
     let open_ports: Vec<&PortResult> = results.iter().filter(|r| r.state == "open").collect();
 
     let service_ms;
-    let service_passive_ms = ((max_rtt_ms * 10.0).max(20.0).min(500.0)) as u64;
-    let service_active_ms = service_passive_ms;
+    let (service_passive_ms, service_active_ms) =
+        service_probe_timeouts(max_rtt_ms, args.timeout);
+    let probe_services = service_version || product_hints;
 
-    struct ServiceInfo {
-        service: String,
-        version: Option<String>,
-        banner_raw: Option<String>,
-        confidence: Option<String>,
-        role: Option<String>,
-        detection_ms: f64,
-    }
-
-    let services: HashMap<u16, ServiceInfo> = if service_version {
+    let services: HashMap<u16, ServiceInfo> = if probe_services && !open_ports.is_empty() {
         let service_start = Instant::now();
         let prober = ServiceProber::new(service_passive_ms, service_active_ms);
 
@@ -148,8 +155,8 @@ async fn main() {
     let os_ms;
     let os_guess;
     let os_accuracy;
-    let os_details;
-    if args.os_detect {
+    let mut os_details;
+    if os_detect {
         let os_timeout = ((max_rtt_ms * 20.0).max(500.0).min(3000.0)) as u64;
         match detect_os(
             ip,
@@ -168,6 +175,9 @@ async fn main() {
                 eprintln!("[error] {e}");
                 std::process::exit(1);
             }
+        }
+        if product_hints {
+            os_details.product_hints = collect_product_hints(&services);
         }
     } else {
         os_ms = 0.0;
@@ -221,12 +231,15 @@ async fn main() {
         if os_details.device_type.is_some() || !os_details.cpes.is_empty() {
             info_level += 1;
         }
+        if product_hints && !os_details.product_hints.is_empty() {
+            info_level += 1;
+        }
     }
 
     let os_label = os_guess.as_deref().unwrap_or("no match");
 
     if args.json {
-        let (json_os_guess, json_os_accuracy, json_os_details) = if args.os_detect {
+        let (json_os_guess, json_os_accuracy, json_os_details) = if os_detect {
             (
                 Some(os_label.to_string()),
                 os_accuracy,
@@ -270,15 +283,10 @@ async fn main() {
             service_version,
             role_labels,
             precise: args.precise,
-            os: if args.os_detect {
-                Some((os_label.to_string(), os_accuracy))
-            } else {
-                None
-            },
         };
         print_port_table(&display, &table_opts);
 
-        if args.os_detect && os_guess.is_some() {
+        if os_detect && os_guess.is_some() {
             print_os_details(os_label, os_accuracy, &os_details);
         }
 
@@ -299,7 +307,7 @@ async fn main() {
             if args.verify {
                 println!("verify:          connect confirm on opens");
             }
-            if service_version {
+            if probe_services {
                 println!(
                     "service total:   {}",
                     display::fmt_duration(service_ms, true)
@@ -309,12 +317,37 @@ async fn main() {
                     service_passive_ms, service_active_ms, max_rtt_ms
                 );
             }
-            if args.os_detect {
+            if os_detect {
                 println!("os total:        {}", display::fmt_duration(os_ms, true));
             }
             println!("wall total:      {}", display::fmt_duration(wall_ms, true));
         }
     }
+}
+
+fn service_probe_timeouts(max_rtt_ms: f64, scan_timeout_secs: f64) -> (u64, u64) {
+    let floor_ms = (scan_timeout_secs * 1000.0 * 3.0).max(1500.0);
+    let active = (max_rtt_ms * 15.0)
+        .max(floor_ms)
+        .min(8000.0) as u64;
+    let passive = ((active as f64) * 0.6).max(300.0).min(4000.0) as u64;
+    (passive, active)
+}
+
+fn collect_product_hints(services: &HashMap<u16, ServiceInfo>) -> Vec<String> {
+    let mut hints = Vec::new();
+    for (port, svc) in services {
+        let text = svc
+            .version
+            .as_deref()
+            .or(svc.banner_raw.as_deref())
+            .unwrap_or("");
+        if let Some(hint) = product_hint_from_banner(*port, text) {
+            hints.push(hint);
+        }
+    }
+    hints.sort_unstable();
+    hints
 }
 
 fn compute_info_level(open_entries: &[&PortEntry], has_reverse_dns: bool) -> u32 {

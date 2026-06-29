@@ -65,9 +65,11 @@ pub const TEST_NAMES: &[&str] = &[
     "SEQ", "OPS", "WIN", "ECN", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "U1", "IE",
 ];
 
+pub const NMAP_OS_DB: &str = "/usr/share/nmap/nmap-os-db";
+
 static DB: OnceLock<Result<OsDatabase, String>> = OnceLock::new();
 
-static EMBEDDED_OS_DB: &str = include_str!("../../../../assets/nmap-os-db");
+const EMBEDDED_OS_DB: &str = include_str!(concat!(env!("OUT_DIR"), "/nmap-os-db"));
 
 pub fn database() -> Result<&'static OsDatabase, String> {
     DB.get_or_init(load_default).as_ref().map_err(|e| e.clone())
@@ -142,29 +144,21 @@ pub fn resolve_db_path() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let system = PathBuf::from("/usr/local/share/dxcan/db/nmap-os-db");
-    if system.is_file() {
-        return Some(system);
+    for candidate in [
+        PathBuf::from(NMAP_OS_DB),
+        PathBuf::from("/usr/local/share/nmap/nmap-os-db"),
+    ] {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            for candidate in [
-                dir.join("nmap-os-db"),
-                dir.join("assets/nmap-os-db"),
-                dir.join("../share/dxcan/nmap-os-db"),
-                dir.join("../assets/nmap-os-db"),
-                dir.join("../../assets/nmap-os-db"),
-                dir.join("../../share/dxcan/nmap-os-db"),
-            ] {
-                if candidate.is_file() {
-                    return Some(candidate);
-                }
+            let sidecar = dir.join("nmap-os-db");
+            if sidecar.is_file() {
+                return Some(sidecar);
             }
         }
-    }
-    let dev = PathBuf::from("assets/nmap-os-db");
-    if dev.is_file() {
-        return Some(dev);
     }
     None
 }
@@ -247,10 +241,13 @@ pub fn parse_os_db(content: &str) -> Result<OsDatabase, String> {
 
 fn load_default() -> Result<OsDatabase, String> {
     if let Some(path) = resolve_db_path() {
-        load_os_db(&path)
-    } else {
-        parse_os_db(EMBEDDED_OS_DB)
+        return load_os_db(&path);
     }
+    parse_os_db(EMBEDDED_OS_DB).map_err(|e| {
+        format!(
+            "nmap-os-db not found (install nmap or set DXCAN_OS_DB); build-time embed failed: {e}"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -258,14 +255,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loads_os_db_from_assets() {
-        let path = resolve_db_path().expect("nmap-os-db path");
+    fn loads_nmap_os_db_from_disk() {
+        let path = resolve_db_path().expect("nmap-os-db not found; install nmap or set DXCAN_OS_DB");
         let db = load_os_db(&path).expect("load");
         assert_db(&db);
     }
 
     #[test]
-    fn loads_embedded_os_db() {
+    fn loads_build_time_embedded_os_db() {
         let db = parse_os_db(EMBEDDED_OS_DB).expect("embedded load");
         assert_db(&db);
     }
@@ -282,7 +279,8 @@ mod tests {
         let linux = db
             .entries
             .iter()
-            .find(|e| e.name.contains("Linux 5.0"))
+            .find(|e| e.name == "Linux 5.0 - 5.4")
+            .or_else(|| db.entries.iter().find(|e| e.name.contains("Linux 5.0")))
             .expect("linux fingerprint");
         let class = linux.primary_class().expect("class");
         assert_eq!(class.os_family, "Linux");

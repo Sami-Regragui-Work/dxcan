@@ -37,6 +37,9 @@ fn resolve_engine(
     reliable_opens: bool,
 ) -> ResolvedEngine {
     if reliable_opens {
+        if matches!(ip, IpAddr::V4(_)) && has_raw_privileges() {
+            return ResolvedEngine::Syn;
+        }
         return ResolvedEngine::Connect;
     }
     match method {

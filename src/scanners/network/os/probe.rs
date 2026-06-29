@@ -23,6 +23,24 @@ pub struct OsMatchDetails {
     pub device_type: Option<String>,
     pub running: Option<String>,
     pub cpes: Vec<String>,
+    pub product_hints: Vec<String>,
+}
+
+impl OsMatchDetails {
+    pub fn nmap_running_line(&self) -> Option<String> {
+        if let Some(r) = &self.running {
+            if !r.is_empty() {
+                return Some(r.clone());
+            }
+        }
+        match (&self.os_family, &self.os_gen) {
+            (Some(f), Some(g)) if !f.is_empty() && !g.is_empty() => {
+                Some(format!("{f} {g}"))
+            }
+            (Some(f), _) if !f.is_empty() => Some(f.clone()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -68,9 +86,10 @@ pub fn detect(
     let src_ip = local_ipv4_for(target_v4)?;
     let open_port = open_ports[0];
     let closed_udp = pick_closed_udp_port(open_ports);
-    let per_probe_ms = timeout_ms.clamp(300, 800);
+    let per_probe_cap = (timeout_ms as f64 * 0.25).clamp(150.0, 500.0);
+    let per_probe_ms = ((rtt_ms * 3.0).max(150.0).min(per_probe_cap)) as u64;
     let timeout = Duration::from_millis(per_probe_ms);
-    let seq_delay_ms = ((rtt_ms * 0.75) as u64).clamp(25, 100);
+    let seq_delay_ms = ((rtt_ms * 0.4) as u64).clamp(10, 50);
     let mut engine = ProbeEngine::new(src_ip, target_v4, timeout)?;
     let seq_base = rand_seq();
     engine.seq_base = seq_base;
@@ -227,12 +246,21 @@ pub fn detect(
 
     match db::database() {
         Ok(db) => {
-            if let Some(m) = r#match::best_match_fingerprint(
+            let pick = r#match::best_match_fingerprint(
                 &result.fingerprint,
                 &db.match_points,
                 &db.entries,
-                50,
-            ) {
+                85,
+            )
+            .or_else(|| {
+                r#match::best_match_fingerprint(
+                    &result.fingerprint,
+                    &db.match_points,
+                    &db.entries,
+                    50,
+                )
+            });
+            if let Some(m) = pick {
                 result.guess = Some(m.name);
                 result.accuracy = Some(m.accuracy);
                 result.details = OsMatchDetails {
@@ -242,6 +270,7 @@ pub fn detect(
                     device_type: m.device_type,
                     running: m.running,
                     cpes: m.cpes,
+                    product_hints: Vec::new(),
                 };
             }
         }
