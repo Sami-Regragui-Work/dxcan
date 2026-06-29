@@ -100,6 +100,8 @@ mod tests {
             status,
             body_len: len,
             body_hash: hash,
+            body_lines: 0,
+            body_words: 0,
             location: loc.map(str::to_string),
             latency_ms: 0.0,
         }

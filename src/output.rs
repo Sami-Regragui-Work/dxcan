@@ -26,6 +26,11 @@ pub struct VhostEntry {
     pub port: u16,
     pub status: u16,
     pub body_len: usize,
+    pub body_lines: usize,
+    pub body_words: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    pub body_hash: String,
     pub latency_ms: f64,
 }
 
@@ -67,4 +72,10 @@ pub struct ScanOutput {
     pub vhost_tls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vhost_elapsed_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vhost_baseline_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vhost_baseline_lines: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vhost_baseline_words: Option<usize>,
 }

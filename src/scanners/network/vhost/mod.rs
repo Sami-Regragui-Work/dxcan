@@ -11,7 +11,8 @@ mod probe;
 mod wordlist;
 
 use diff::{catchall_consensus, is_actionable_hit, length_only_diff};
-use probe::{is_http_port, port_uses_tls, probe_host, HttpResponse};
+pub use probe::{body_hash_hex, is_http_port, port_uses_tls};
+use probe::{probe_host, HttpResponse};
 use wordlist::{expand_hostname, load_wordlist};
 
 #[derive(Debug, Clone)]
@@ -37,6 +38,11 @@ pub struct VhostHit {
     pub port: u16,
     pub status: u16,
     pub body_len: usize,
+    pub body_lines: usize,
+    pub body_words: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    pub body_hash: String,
     pub latency_ms: f64,
 }
 
@@ -83,7 +89,7 @@ pub async fn discover_vhosts(opts: &VhostOptions) -> Result<VhostDiscoverResult,
         return Err("wordlist is empty".into());
     }
 
-    let candidates: Vec<String> = lines
+    let hostnames: Vec<String> = lines
         .iter()
         .map(|l| expand_hostname(l, &opts.base_domain))
         .filter(|h| !h.is_empty())
@@ -92,47 +98,63 @@ pub async fn discover_vhosts(opts: &VhostOptions) -> Result<VhostDiscoverResult,
     let use_tls = opts.tls.unwrap_or_else(|| port_uses_tls(opts.port));
     let calibrate = opts.calibrate.max(1);
 
-    let mut baselines = Vec::new();
+    let mut cal_futs = FuturesUnordered::new();
     for i in 0..calibrate {
         let baseline_host = format!(
             "invalid-{i}-{:x}.invalid",
             start.elapsed().as_nanos() & 0xffff_ffff
         );
-        baselines.push(
-            probe_host(
-                opts.ip,
-                opts.port,
-                &baseline_host,
-                &opts.path,
-                use_tls,
-                opts.request_timeout,
-            )
-            .await?,
-        );
-    }
-
-    let sem = Arc::new(Semaphore::new(opts.workers.max(1)));
-    let mut futs = FuturesUnordered::new();
-
-    for hostname in candidates {
-        let sem = sem.clone();
         let ip = opts.ip;
         let port = opts.port;
         let path = opts.path.clone();
         let request_timeout = opts.request_timeout;
-        futs.push(async move {
-            let _permit = sem.acquire_owned().await.unwrap();
-            let resp = probe_host(ip, port, &hostname, &path, use_tls, request_timeout).await;
-            (hostname, resp)
+        cal_futs.push(async move {
+            probe_host(ip, port, &baseline_host, &path, use_tls, request_timeout).await
         });
+    }
+    let mut baselines = Vec::new();
+    while let Some(result) = cal_futs.next().await {
+        baselines.push(result?);
     }
 
     let mut probed = 0usize;
     let mut candidates: Vec<(String, HttpResponse)> = Vec::new();
-    while let Some((hostname, resp)) = futs.next().await {
-        probed += 1;
-        let Ok(resp) = resp else { continue };
-        candidates.push((hostname, resp));
+
+    if use_tls {
+        let sem = Arc::new(Semaphore::new(opts.workers.max(1)));
+        let mut futs = FuturesUnordered::new();
+        for hostname in hostnames.clone() {
+            let sem = sem.clone();
+            let ip = opts.ip;
+            let port = opts.port;
+            let path = opts.path.clone();
+            let request_timeout = opts.request_timeout;
+            futs.push(async move {
+                let _permit = sem.acquire_owned().await.unwrap();
+                let resp = probe_host(ip, port, &hostname, &path, use_tls, request_timeout).await;
+                (hostname, resp)
+            });
+        }
+        while let Some((hostname, resp)) = futs.next().await {
+            probed += 1;
+            let Ok(resp) = resp else { continue };
+            candidates.push((hostname, resp));
+        }
+    } else {
+        probed = hostnames.len();
+        let pooled = probe::probe_plain_pooled(
+            opts.ip,
+            opts.port,
+            hostnames,
+            &opts.path,
+            opts.workers,
+            opts.request_timeout,
+        )
+        .await;
+        for (hostname, resp) in pooled {
+            let Ok(resp) = resp else { continue };
+            candidates.push((hostname, resp));
+        }
     }
 
     let candidate_responses: Vec<HttpResponse> =
@@ -183,6 +205,10 @@ pub async fn discover_vhosts(opts: &VhostOptions) -> Result<VhostDiscoverResult,
                 port: opts.port,
                 status: resp.status,
                 body_len: resp.body_len,
+                body_lines: resp.body_lines,
+                body_words: resp.body_words,
+                location: resp.location.clone(),
+                body_hash: probe::body_hash_hex(resp.body_hash),
                 latency_ms: resp.latency_ms,
             });
         }

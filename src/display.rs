@@ -87,10 +87,14 @@ pub fn print_vhost_results(
         println!("  (none)");
         return;
     }
-    let cols: [(&str, usize); 4] = [
-        ("HOST", 40),
+    let cols: [(&str, usize); 8] = [
+        ("HOST", 36),
         ("STATUS", 8),
         ("LENGTH", 10),
+        ("LINES", 8),
+        ("WORDS", 8),
+        ("HASH", 18),
+        ("LOCATION", 24),
         ("LATENCY", 13),
     ];
     let header: String = cols
@@ -102,11 +106,16 @@ pub fn print_vhost_results(
     println!("{header}");
     println!("{}", "-".repeat(width));
     for h in hits {
+        let loc = h.location.as_deref().unwrap_or("");
         let row = [
             truncate_pad(&h.hostname, cols[0].1),
             truncate_pad(&h.status.to_string(), cols[1].1),
             truncate_pad(&h.body_len.to_string(), cols[2].1),
-            truncate_pad(&fmt_duration(h.latency_ms, opts.precise), cols[3].1),
+            truncate_pad(&h.body_lines.to_string(), cols[3].1),
+            truncate_pad(&h.body_words.to_string(), cols[4].1),
+            truncate_pad(&h.body_hash, cols[5].1),
+            truncate_pad(loc, cols[6].1),
+            truncate_pad(&fmt_duration(h.latency_ms, opts.precise), cols[7].1),
         ]
         .join(" ");
         println!("{row}");

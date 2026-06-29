@@ -31,7 +31,7 @@ struct ServiceInfo {
     detection_ms: f64,
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
     let t0 = Instant::now();
 
@@ -193,6 +193,9 @@ async fn main() {
     let mut vhost_scan_port: Option<u16> = None;
     let mut vhost_baseline_status = 0u16;
     let mut vhost_baseline_len = 0usize;
+    let mut vhost_baseline_hash = String::new();
+    let mut vhost_baseline_lines = 0usize;
+    let mut vhost_baseline_words = 0usize;
     let mut vhost_tls = false;
 
     if args.vhost {
@@ -245,12 +248,19 @@ async fn main() {
                     vhost_scan_port = Some(r.port);
                     vhost_baseline_status = r.baseline.status;
                     vhost_baseline_len = r.baseline.body_len;
+                    vhost_baseline_hash = scanners::network::vhost::body_hash_hex(r.baseline.body_hash);
+                    vhost_baseline_lines = r.baseline.body_lines;
+                    vhost_baseline_words = r.baseline.body_words;
                     for hit in r.hits {
                         vhost_entries.push(VhostEntry {
                             hostname: hit.hostname,
                             port: hit.port,
                             status: hit.status,
                             body_len: hit.body_len,
+                            body_lines: hit.body_lines,
+                            body_words: hit.body_words,
+                            location: hit.location,
+                            body_hash: hit.body_hash,
                             latency_ms: hit.latency_ms,
                         });
                     }
@@ -347,6 +357,21 @@ async fn main() {
             vhost_port: if args.vhost { vhost_scan_port } else { None },
             vhost_tls: if args.vhost { Some(vhost_tls) } else { None },
             vhost_elapsed_ms: if args.vhost { Some(vhost_ms) } else { None },
+            vhost_baseline_hash: if args.vhost && !vhost_baseline_hash.is_empty() {
+                Some(vhost_baseline_hash.clone())
+            } else {
+                None
+            },
+            vhost_baseline_lines: if args.vhost {
+                Some(vhost_baseline_lines)
+            } else {
+                None
+            },
+            vhost_baseline_words: if args.vhost {
+                Some(vhost_baseline_words)
+            } else {
+                None
+            },
         };
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     } else {
