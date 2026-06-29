@@ -255,3 +255,27 @@ fn sanitise_banner(banner: &[u8]) -> String {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scanners::network::service::types::Confidence;
+
+    #[test]
+    fn ssh_banner_confirmed() {
+        let banner = b"SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.13\r\n";
+        let r = match_banner(banner, 22, Confidence::Confirmed).unwrap();
+        assert_eq!(r.service, "ssh");
+        assert_eq!(r.confidence, Confidence::Confirmed);
+        assert!(r.version.unwrap().starts_with("SSH-2.0"));
+        assert!(r.banner_raw.unwrap().contains("OpenSSH"));
+    }
+
+    #[test]
+    fn http_head_response_heuristic() {
+        let banner = b"HTTP/1.1 200 OK\r\nServer: nginx/1.18.0\r\n\r\n";
+        let r = match_banner(banner, 80, Confidence::Heuristic).unwrap();
+        assert_eq!(r.service, "http");
+        assert_eq!(r.version.as_deref(), Some("nginx/1.18.0"));
+    }
+}

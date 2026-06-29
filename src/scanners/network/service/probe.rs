@@ -103,3 +103,44 @@ impl ServiceProber {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use super::*;
+    use crate::scanners::network::service::types::Confidence;
+
+    #[tokio::test]
+    async fn scanme_ssh_sv_timing() {
+        let ip: std::net::IpAddr = "45.33.32.156".parse().expect("scanme ipv4");
+
+        let prober = ServiceProber::new(500, 5000);
+        let wall_start = Instant::now();
+        let r = prober.probe(ip, 22).await;
+        let wall_ms = wall_start.elapsed().as_secs_f64() * 1000.0;
+
+        assert_eq!(r.port, 22);
+        assert_eq!(r.service, "ssh");
+        assert_eq!(r.confidence, Confidence::Confirmed);
+        assert!(r.version.is_some(), "expected SSH version banner");
+        assert!(r.banner_raw.is_some(), "expected raw banner");
+        assert!(r.detection_ms > 0.0, "detection_ms should be recorded");
+        assert!(
+            r.detection_ms <= wall_ms + 100.0,
+            "detection_ms {} should not exceed wall {} by much",
+            r.detection_ms,
+            wall_ms
+        );
+        assert!(
+            r.detection_ms < 10_000.0,
+            "detection_ms {} looks stuck or timed out wrong",
+            r.detection_ms
+        );
+        assert!(
+            wall_ms < 12_000.0,
+            "wall probe took {}ms — service path too slow",
+            wall_ms
+        );
+    }
+}
