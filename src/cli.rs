@@ -59,6 +59,47 @@ pub struct Args {
     #[arg(long = "sv-rich")]
     pub sv_rich: bool,
 
+    #[arg(long = "vhost")]
+    pub vhost: bool,
+
+    #[arg(long = "vhost-wordlist")]
+    pub vhost_wordlist: Option<String>,
+
+    #[arg(long = "vhost-port")]
+    pub vhost_port: Option<u16>,
+
+    #[arg(long = "vhost-domain")]
+    pub vhost_domain: Option<String>,
+
+    #[arg(long = "vhost-workers")]
+    pub vhost_workers: Option<usize>,
+
+    #[arg(long = "vhost-path", default_value = "/")]
+    pub vhost_path: String,
+
+    #[arg(long = "vhost-calibrate", default_value_t = 3)]
+    pub vhost_calibrate: u32,
+
+    #[arg(long = "vhost-hash")]
+    pub vhost_hash: bool,
+
+    #[arg(long = "vhost-ignore-length")]
+    pub vhost_ignore_length: Option<String>,
+
+    #[arg(long = "vhost-ignore-status")]
+    pub vhost_ignore_status: Option<String>,
+
+    #[arg(long = "vhost-length-margin", default_value_t = 0)]
+    pub vhost_length_margin: usize,
+
+    #[arg(
+        long = "vhost-tls",
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    pub vhost_tls: Option<bool>,
+
     #[arg(short, long)]
     pub json: bool,
 

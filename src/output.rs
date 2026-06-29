@@ -20,6 +20,15 @@ pub struct PortEntry {
     pub error:      Option<String>,
 }
 
+#[derive(Serialize, Clone)]
+pub struct VhostEntry {
+    pub hostname: String,
+    pub port: u16,
+    pub status: u16,
+    pub body_len: usize,
+    pub latency_ms: f64,
+}
+
 #[derive(Serialize)]
 pub struct ScanOutput {
     pub tool:       String,
@@ -48,4 +57,14 @@ pub struct ScanOutput {
     pub os_running: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub os_cpes: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub vhosts: Vec<VhostEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vhost_probed: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vhost_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vhost_tls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vhost_elapsed_ms: Option<f64>,
 }

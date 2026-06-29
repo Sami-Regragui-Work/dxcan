@@ -22,6 +22,8 @@ serde_json = "1"
 futures    = "0.3"
 tokio      = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "process"] }
 quick-xml  = { version = "0.40", features = ["serialize"] }
-regex      = "1"
-dns-lookup = "2"
-libc      = "0.2"
+regex        = "1"
+dns-lookup   = "2"
+libc         = "0.2"
+tokio-rustls = "0.26"
+webpki-roots = "0.26"

@@ -1,4 +1,4 @@
-use crate::output::PortEntry;
+use crate::output::{PortEntry, VhostEntry};
 
 pub struct DisplayOpts {
     pub service_version: bool,
@@ -69,6 +69,46 @@ pub fn print_port_table(entries: &[PortEntry], opts: &DisplayOpts) {
             .map(|(val, (_, w))| truncate_pad(val, *w))
             .collect::<Vec<_>>()
             .join(" ");
+        println!("{row}");
+    }
+}
+
+pub fn print_vhost_results(
+    hits: &[VhostEntry],
+    port: u16,
+    probed: usize,
+    baseline_status: u16,
+    baseline_len: usize,
+    opts: &DisplayOpts,
+) {
+    println!();
+    println!("Virtual hosts on port {port} (baseline {baseline_status}/{baseline_len} bytes, probed {probed}):");
+    if hits.is_empty() {
+        println!("  (none)");
+        return;
+    }
+    let cols: [(&str, usize); 4] = [
+        ("HOST", 40),
+        ("STATUS", 8),
+        ("LENGTH", 10),
+        ("LATENCY", 13),
+    ];
+    let header: String = cols
+        .iter()
+        .map(|(name, w)| format!("{name:<w$}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let width: usize = cols.iter().map(|(_, w)| *w).sum::<usize>() + cols.len().saturating_sub(1);
+    println!("{header}");
+    println!("{}", "-".repeat(width));
+    for h in hits {
+        let row = [
+            truncate_pad(&h.hostname, cols[0].1),
+            truncate_pad(&h.status.to_string(), cols[1].1),
+            truncate_pad(&h.body_len.to_string(), cols[2].1),
+            truncate_pad(&fmt_duration(h.latency_ms, opts.precise), cols[3].1),
+        ]
+        .join(" ");
         println!("{row}");
     }
 }

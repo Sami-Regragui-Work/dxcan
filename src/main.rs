@@ -10,14 +10,17 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use cli::Args;
-use display::{print_open_ports_summary, print_os_details, print_port_table, DisplayOpts};
-use output::{PortEntry, ScanOutput};
+use display::{
+    print_open_ports_summary, print_os_details, print_port_table, print_vhost_results, DisplayOpts,
+};
+use output::{PortEntry, ScanOutput, VhostEntry};
 use resolver::{resolve_host, reverse_dns};
 use scanners::network::port::PortResult;
 use scanners::network::scan::{run_port_scan, scan_mode, ScanPlan};
 use scanners::network::{
     os::detect_os,
     service::{port_label, product_hint_from_banner, service_role_label, ServiceProber},
+    vhost::{discover_vhosts, parse_status_list, parse_usize_list, pick_http_ports, resolve_base_domain, VhostOptions},
 };
 
 struct ServiceInfo {
@@ -90,8 +93,7 @@ async fn main() {
     let open_ports: Vec<&PortResult> = results.iter().filter(|r| r.state == "open").collect();
 
     let service_ms;
-    let (service_passive_ms, service_active_ms) =
-        service_probe_timeouts(max_rtt_ms, args.timeout);
+    let (service_passive_ms, service_active_ms) = service_probe_timeouts(max_rtt_ms, args.timeout);
     let probe_services = service_version || product_hints;
 
     let services: HashMap<u16, ServiceInfo> = if probe_services && !open_ports.is_empty() {
@@ -186,6 +188,82 @@ async fn main() {
         os_details = Default::default();
     }
 
+    let mut vhost_ms = 0.0;
+    let mut vhost_entries: Vec<VhostEntry> = Vec::new();
+    let mut vhost_probed = 0usize;
+    let mut vhost_scan_port: Option<u16> = None;
+    let mut vhost_baseline_status = 0u16;
+    let mut vhost_baseline_len = 0usize;
+    let mut vhost_tls = false;
+
+    if args.vhost {
+        let http_ports = pick_http_ports(&open_port_nums, args.vhost_port);
+        if http_ports.is_empty() {
+            eprintln!("[error] --vhost: no open HTTP ports (try -p 80 or --vhost-port)");
+            std::process::exit(1);
+        }
+        let base_domain = args
+            .vhost_domain
+            .clone()
+            .unwrap_or_else(|| resolve_base_domain(&args.host, reverse_name.as_deref()));
+        let wordlist_path = args.vhost_wordlist.as_ref().map(std::path::PathBuf::from);
+        let vhost_workers = args
+            .vhost_workers
+            .unwrap_or_else(|| args.workers.max(50).min(200));
+        let request_timeout = std::time::Duration::from_secs_f64(args.timeout.max(2.0));
+        let ignore_lengths = args
+            .vhost_ignore_length
+            .as_deref()
+            .map(parse_usize_list)
+            .unwrap_or_default();
+        let ignore_statuses = args
+            .vhost_ignore_status
+            .as_deref()
+            .map(parse_status_list)
+            .unwrap_or_default();
+
+        for port in http_ports {
+            let opts = VhostOptions {
+                ip,
+                port,
+                base_domain: base_domain.clone(),
+                wordlist_path: wordlist_path.clone(),
+                path: args.vhost_path.clone(),
+                workers: vhost_workers,
+                request_timeout,
+                calibrate: args.vhost_calibrate,
+                tls: args.vhost_tls,
+                match_hash: args.vhost_hash,
+                length_margin: args.vhost_length_margin,
+                ignore_lengths: ignore_lengths.clone(),
+                ignore_statuses: ignore_statuses.clone(),
+            };
+            match discover_vhosts(&opts).await {
+                Ok(r) => {
+                    vhost_ms += r.detection_ms;
+                    vhost_tls = r.tls;
+                    vhost_probed += r.probed;
+                    vhost_scan_port = Some(r.port);
+                    vhost_baseline_status = r.baseline.status;
+                    vhost_baseline_len = r.baseline.body_len;
+                    for hit in r.hits {
+                        vhost_entries.push(VhostEntry {
+                            hostname: hit.hostname,
+                            port: hit.port,
+                            status: hit.status,
+                            body_len: hit.body_len,
+                            latency_ms: hit.latency_ms,
+                        });
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[error] vhost on port {port}: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     let display: Vec<PortEntry> = results
@@ -235,16 +313,15 @@ async fn main() {
             info_level += 1;
         }
     }
+    if !vhost_entries.is_empty() {
+        info_level += vhost_entries.len() as u32;
+    }
 
     let os_label = os_guess.as_deref().unwrap_or("no match");
 
     if args.json {
         let (json_os_guess, json_os_accuracy, json_os_details) = if os_detect {
-            (
-                Some(os_label.to_string()),
-                os_accuracy,
-                Some(&os_details),
-            )
+            (Some(os_label.to_string()), os_accuracy, Some(&os_details))
         } else {
             (None, None, None)
         };
@@ -266,6 +343,11 @@ async fn main() {
             os_device_type: json_os_details.and_then(|d| d.device_type.clone()),
             os_running: json_os_details.and_then(|d| d.running.clone()),
             os_cpes: json_os_details.map(|d| d.cpes.clone()).unwrap_or_default(),
+            vhosts: vhost_entries.clone(),
+            vhost_probed: if args.vhost { Some(vhost_probed) } else { None },
+            vhost_port: if args.vhost { vhost_scan_port } else { None },
+            vhost_tls: if args.vhost { Some(vhost_tls) } else { None },
+            vhost_elapsed_ms: if args.vhost { Some(vhost_ms) } else { None },
         };
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     } else {
@@ -288,6 +370,18 @@ async fn main() {
 
         if os_detect && os_guess.is_some() {
             print_os_details(os_label, os_accuracy, &os_details);
+        }
+
+        if args.vhost {
+            let vport = vhost_scan_port.unwrap_or(0);
+            print_vhost_results(
+                &vhost_entries,
+                vport,
+                vhost_probed,
+                vhost_baseline_status,
+                vhost_baseline_len,
+                &table_opts,
+            );
         }
 
         if args.all {
@@ -320,6 +414,12 @@ async fn main() {
             if os_detect {
                 println!("os total:        {}", display::fmt_duration(os_ms, true));
             }
+            if args.vhost {
+                println!("vhost total:     {}", display::fmt_duration(vhost_ms, true));
+                println!("vhost probed:    {vhost_probed}");
+                println!("vhost found:     {}", vhost_entries.len());
+                println!("vhost tls:       {vhost_tls}");
+            }
             println!("wall total:      {}", display::fmt_duration(wall_ms, true));
         }
     }
@@ -327,9 +427,7 @@ async fn main() {
 
 fn service_probe_timeouts(max_rtt_ms: f64, scan_timeout_secs: f64) -> (u64, u64) {
     let floor_ms = (scan_timeout_secs * 1000.0 * 3.0).max(1500.0);
-    let active = (max_rtt_ms * 15.0)
-        .max(floor_ms)
-        .min(8000.0) as u64;
+    let active = (max_rtt_ms * 15.0).max(floor_ms).min(8000.0) as u64;
     let passive = ((active as f64) * 0.6).max(300.0).min(4000.0) as u64;
     (passive, active)
 }
