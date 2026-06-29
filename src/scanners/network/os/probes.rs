@@ -19,7 +19,6 @@ pub const PRB_OPTS: [&[u8]; 13] = [
 pub const PRB_WINDOWS: [u16; 13] = [1, 63, 4, 4, 16, 512, 3, 128, 256, 1024, 31337, 32768, 65535];
 
 pub const TCP_PORT_BASE: u16 = 33000;
-pub const SEQ_PROBE_DELAY_MS: u64 = 100;
 
 pub const TH_FIN: u8 = 0x01;
 pub const TH_SYN: u8 = 0x02;

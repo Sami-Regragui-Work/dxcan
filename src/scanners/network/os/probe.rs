@@ -9,8 +9,8 @@ use super::packet::{
     parse_icmp_unreach, parse_ip_tcp, tcp_options_string, tcp_timestamp, ParsedIpTcp,
 };
 use super::probes::{
-    pick_closed_udp_port, ECN_URG_PTR, NUM_SEQ, PRB_OPTS, PRB_WINDOWS, SEQ_PROBE_DELAY_MS,
-    TCP_PORT_BASE,     TH_ACK, TH_CWR, TH_ECE, TH_FIN, TH_PUSH, TH_SYN, TH_URG,
+    pick_closed_udp_port, ECN_URG_PTR, NUM_SEQ, PRB_OPTS, PRB_WINDOWS, TCP_PORT_BASE,
+    TH_ACK, TH_CWR, TH_ECE, TH_FIN, TH_PUSH, TH_SYN, TH_URG,
 };
 use super::r#match;
 use super::seq_analysis::{fill_seq_fields, fill_seq_ipid_fields, SeqSamples};
@@ -49,7 +49,9 @@ pub fn has_raw_privileges() -> bool {
 pub fn detect(
     target: IpAddr,
     open_ports: &[u16],
+    _closed_candidates: &[u16],
     closed_tcp: u16,
+    rtt_ms: f64,
     timeout_ms: u64,
 ) -> Result<OsDetectResult, String> {
     let IpAddr::V4(target_v4) = target else {
@@ -66,8 +68,9 @@ pub fn detect(
     let src_ip = local_ipv4_for(target_v4)?;
     let open_port = open_ports[0];
     let closed_udp = pick_closed_udp_port(open_ports);
-    let per_probe_ms = timeout_ms.clamp(400, 1200);
+    let per_probe_ms = timeout_ms.clamp(300, 800);
     let timeout = Duration::from_millis(per_probe_ms);
+    let seq_delay_ms = ((rtt_ms * 0.75) as u64).clamp(25, 100);
     let mut engine = ProbeEngine::new(src_ip, target_v4, timeout)?;
     let seq_base = rand_seq();
     engine.seq_base = seq_base;
@@ -105,11 +108,11 @@ pub fn detect(
             }
         }
         if i + 1 < NUM_SEQ {
-            std::thread::sleep(Duration::from_millis(SEQ_PROBE_DELAY_MS));
+            std::thread::sleep(Duration::from_millis(seq_delay_ms));
         }
     }
 
-    fill_seq_fields(&mut fp, &samples, SEQ_PROBE_DELAY_MS);
+    fill_seq_fields(&mut fp, &samples, seq_delay_ms);
 
     for i in 0..2 {
         let df = i == 0;
@@ -130,6 +133,8 @@ pub fn detect(
     engine.send_udp(closed_udp, TCP_PORT_BASE + 20, 0x1042, &udp_payload)?;
     if let Some(reply) = engine.recv_icmp_unreach() {
         fill_u1(&mut fp, &reply);
+    } else {
+        mark_test_absent(&mut fp, "U1");
     }
 
     for i in 0..NUM_SEQ {
@@ -150,7 +155,6 @@ pub fn detect(
                 ops[i] = Some(reply);
             }
         }
-        std::thread::sleep(Duration::from_millis(SEQ_PROBE_DELAY_MS));
     }
     fill_ops_win(&mut fp, &ops);
 
@@ -168,6 +172,8 @@ pub fn detect(
     )?;
     if let Some(reply) = engine.recv_tcp(open_port, ecn_port, seq_base) {
         fill_ecn(&mut fp, &reply);
+    } else {
+        mark_test_absent(&mut fp, "ECN");
     }
 
     let t_specs: [(usize, u8, usize, u16, bool, usize); 6] = [
@@ -205,8 +211,8 @@ pub fn detect(
         let name = format!("T{}", i + 1);
         if let Some(r) = reply {
             fill_tcp_test(&mut fp, &name, r, i == 0);
-        } else if i >= 4 {
-            fp.set(&name, "R", "N");
+        } else {
+            mark_test_absent(&mut fp, &name);
         }
     }
 
@@ -225,7 +231,7 @@ pub fn detect(
                 &result.fingerprint,
                 &db.match_points,
                 &db.entries,
-                1,
+                50,
             ) {
                 result.guess = Some(m.name);
                 result.accuracy = Some(m.accuracy);
@@ -535,6 +541,10 @@ fn tcp_reply_from(parsed: ParsedIpTcp, our_seq: u32) -> TcpReply {
         raw_options: parsed.options,
         tcp_flags: parsed.flags,
     }
+}
+
+fn mark_test_absent(fp: &mut Fingerprint, test: &str) {
+    fp.set(test, "R", "N");
 }
 
 fn fill_ops_win(fp: &mut Fingerprint, ops: &[Option<TcpReply>; NUM_SEQ]) {

@@ -8,13 +8,19 @@ use tokio::time::timeout;
 
 use crate::scanners::network::rtt::RttTracker;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PortResult {
     pub port: u16,
     pub protocol: String,
     pub state: String,
     pub latency_ms: f64,
     pub error: Option<String>,
+}
+
+pub enum PortProbeOutcome {
+    Open(PortResult),
+    Closed,
+    NotOpen,
 }
 
 pub fn parse_ports(spec: &str) -> Vec<u16> {
@@ -41,7 +47,7 @@ pub fn parse_ports(spec: &str) -> Vec<u16> {
     ports.into_iter().collect()
 }
 
-pub async fn scan_port(
+pub async fn scan_port_full(
     ip: IpAddr,
     port: u16,
     base_dur: Duration,
@@ -49,18 +55,65 @@ pub async fn scan_port(
     rtt: Arc<Mutex<RttTracker>>,
 ) -> PortResult {
     let _permit = sem.acquire().await.unwrap();
+    let dur = probe_timeout(base_dur, &rtt);
+    probe_port(ip, port, dur, &rtt, true).await
+}
 
-    let dur = {
-        let tracker = rtt.lock().unwrap();
-        let cap = base_dur;
-        let floor = Duration::from_secs_f64(base_dur.as_secs_f64() * 0.25);
-        let chosen = tracker
-            .timeout_ms()
-            .map(|ms| Duration::from_secs_f64(ms / 1000.0))
-            .unwrap_or(base_dur);
-        chosen.max(floor).min(cap)
-    };
+pub async fn scan_port_open_only(
+    ip: IpAddr,
+    port: u16,
+    base_dur: Duration,
+    open_cap: Duration,
+    sem: Arc<Semaphore>,
+    rtt: Arc<Mutex<RttTracker>>,
+    closed_samples: Arc<Mutex<Vec<u16>>>,
+) -> PortProbeOutcome {
+    let _permit = sem.acquire().await.unwrap();
+    let adaptive = probe_timeout(base_dur, &rtt);
+    let dur = adaptive.min(open_cap);
+    match probe_port(ip, port, dur, &rtt, true).await {
+        PortResult {
+            state,
+            port,
+            latency_ms,
+            ..
+        } if state == "open" => PortProbeOutcome::Open(PortResult {
+            port,
+            protocol: "tcp".into(),
+            state,
+            latency_ms,
+            error: None,
+        }),
+        PortResult {
+            state,
+            port,
+            ..
+        } if state == "closed" => {
+            closed_samples.lock().unwrap().push(port);
+            PortProbeOutcome::Closed
+        }
+        _ => PortProbeOutcome::NotOpen,
+    }
+}
 
+fn probe_timeout(base_dur: Duration, rtt: &Arc<Mutex<RttTracker>>) -> Duration {
+    let tracker = rtt.lock().unwrap();
+    let cap = base_dur;
+    let floor = Duration::from_secs_f64(base_dur.as_secs_f64() * 0.25);
+    let chosen = tracker
+        .timeout_ms()
+        .map(|ms| Duration::from_secs_f64(ms / 1000.0))
+        .unwrap_or(base_dur);
+    chosen.max(floor).min(cap)
+}
+
+async fn probe_port(
+    ip: IpAddr,
+    port: u16,
+    dur: Duration,
+    rtt: &Arc<Mutex<RttTracker>>,
+    update_rtt: bool,
+) -> PortResult {
     let addr = SocketAddr::new(ip, port);
     let start = Instant::now();
 
@@ -74,7 +127,9 @@ pub async fn scan_port(
 
     match connect_result {
         Ok(_) => {
-            rtt.lock().unwrap().update(latency_ms);
+            if update_rtt {
+                rtt.lock().unwrap().update(latency_ms);
+            }
             PortResult {
                 port,
                 protocol: "tcp".into(),
@@ -84,7 +139,9 @@ pub async fn scan_port(
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
-            rtt.lock().unwrap().update(latency_ms);
+            if update_rtt {
+                rtt.lock().unwrap().update(latency_ms);
+            }
             PortResult {
                 port,
                 protocol: "tcp".into(),

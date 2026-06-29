@@ -1,4 +1,17 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ScanMethod {
+    Auto,
+    Connect,
+    Syn,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ScanMode {
+    OpenOnly,
+    Full,
+}
 
 #[derive(Parser)]
 #[command(
@@ -18,6 +31,12 @@ pub struct Args {
 
     #[arg(short, long, default_value_t = 500)]
     pub workers: usize,
+
+    #[arg(long = "scan-method", value_enum, default_value_t = ScanMethod::Auto)]
+    pub scan_method: ScanMethod,
+
+    #[arg(long)]
+    pub verify: bool,
 
     #[arg(long = "service-version", short = 's', alias = "sv")]
     pub service_version: bool,

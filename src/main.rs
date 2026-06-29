@@ -7,19 +7,16 @@ mod scanners;
 use clap::Parser;
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use tokio::sync::Semaphore;
+use std::time::Instant;
 
 use cli::Args;
 use display::{print_open_ports_summary, print_os_details, print_port_table, DisplayOpts};
 use output::{PortEntry, ScanOutput};
 use resolver::{resolve_host, reverse_dns};
 use scanners::network::port::PortResult;
+use scanners::network::scan::{run_port_scan, scan_mode, ScanPlan};
 use scanners::network::{
     os::detect_os,
-    port::{parse_ports, scan_port},
-    rtt::RttTracker,
     service::{port_label, service_role_label, ServiceProber},
 };
 
@@ -46,39 +43,36 @@ async fn main() {
         None
     };
 
-    let ports = parse_ports(&args.ports);
+    let ports = scanners::network::port::parse_ports(&args.ports);
     if ports.is_empty() {
         eprintln!("[error] No valid ports in range 1-65535.");
         std::process::exit(1);
     }
 
     let total = ports.len();
-    let workers = args.workers.min(total).max(1);
-    let sem = Arc::new(Semaphore::new(workers));
-    let base_dur = Duration::from_secs_f64(args.timeout);
-    let rtt = Arc::new(Mutex::new(RttTracker::new(args.timeout * 1000.0)));
+    let mode = scan_mode(args.all);
+    let plan = ScanPlan {
+        mode,
+        method: args.scan_method,
+        verify: args.verify,
+        reliable_opens: args.os_detect,
+    };
 
     let scan_start = Instant::now();
-
-    let mut futs = FuturesUnordered::new();
-    for port in ports {
-        futs.push(scan_port(ip, port, base_dur, sem.clone(), rtt.clone()));
-    }
-
-    let mut results: Vec<PortResult> = Vec::with_capacity(total);
-    while let Some(r) = futs.next().await {
-        results.push(r);
-    }
-    results.sort_unstable_by_key(|r| r.port);
-
+    let scan_outcome = match run_port_scan(ip, &ports, args.timeout, args.workers, &plan).await {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("[error] {e}");
+            std::process::exit(1);
+        }
+    };
+    let results = scan_outcome.results;
+    let closed_port_nums = scan_outcome.closed_samples;
+    let max_rtt_ms = scan_outcome.max_rtt_ms;
+    let scan_method_label = scan_outcome.method_label;
     let scan_ms = scan_start.elapsed().as_secs_f64() * 1000.0;
 
     let open_ports: Vec<&PortResult> = results.iter().filter(|r| r.state == "open").collect();
-
-    let max_rtt_ms = open_ports
-        .iter()
-        .map(|r| r.latency_ms)
-        .fold(0.0_f64, f64::max);
 
     let service_ms;
     let service_passive_ms = ((max_rtt_ms * 10.0).max(20.0).min(500.0)) as u64;
@@ -157,7 +151,13 @@ async fn main() {
     let os_details;
     if args.os_detect {
         let os_timeout = ((max_rtt_ms * 20.0).max(500.0).min(3000.0)) as u64;
-        match detect_os(ip, &open_port_nums, os_timeout) {
+        match detect_os(
+            ip,
+            &open_port_nums,
+            &closed_port_nums,
+            max_rtt_ms,
+            os_timeout,
+        ) {
             Ok(r) => {
                 os_ms = r.detection_ms;
                 os_guess = r.guess;
@@ -223,9 +223,7 @@ async fn main() {
         }
     }
 
-    let os_label = os_guess
-        .as_deref()
-        .unwrap_or("no match");
+    let os_label = os_guess.as_deref().unwrap_or("no match");
 
     if args.json {
         let (json_os_guess, json_os_accuracy, json_os_details) = if args.os_detect {
@@ -296,7 +294,11 @@ async fn main() {
 
         if args.debug {
             println!("\n--- debug ---");
-            println!("connect total:   {}", display::fmt_duration(scan_ms, true));
+            println!("port scan:       {}", display::fmt_duration(scan_ms, true));
+            println!("scan method:     {scan_method_label}");
+            if args.verify {
+                println!("verify:          connect confirm on opens");
+            }
             if service_version {
                 println!(
                     "service total:   {}",

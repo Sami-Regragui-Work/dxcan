@@ -40,11 +40,30 @@ dxcan --version
 
 ## Quick start
 
-Port scan:
+Port scan (default: open ports only; SYN half-open when privileged):
 
 ```bash
-dxcan -H scanme.nmap.org -p 1-1024
+sudo dxcan -H scanme.nmap.org -p 1-1024
 ```
+
+All port states (closed, filtered) — full connect classification:
+
+```bash
+dxcan -H scanme.nmap.org -p 1-1024 --all
+```
+
+Scan method and verify (optional):
+
+```bash
+dxcan -H scanme.nmap.org -p 1-1024 --scan-method connect
+sudo dxcan -H scanme.nmap.org -p 1-1024 --scan-method syn --verify
+```
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--scan-method auto\|connect\|syn` | `auto` | `auto`: SYN open-only when root + IPv4; connect when `--all` |
+| `--verify` | off | After SYN discovery, connect-confirm each open port |
+| `--all` | off | Classify every port (closed/filtered); uses full connect scan |
 
 Service versions:
 

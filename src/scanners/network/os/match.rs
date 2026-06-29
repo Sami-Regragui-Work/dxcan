@@ -57,10 +57,18 @@ pub fn best_match_fingerprint(
         if accuracy < min_accuracy {
             continue;
         }
-        let replace = best
-            .as_ref()
-            .map(|b| accuracy > b.accuracy || (accuracy == b.accuracy && score > b.score))
-            .unwrap_or(true);
+        let replace = best.as_ref().map(|b| {
+            if accuracy > b.accuracy {
+                return true;
+            }
+            if accuracy == b.accuracy && score > b.score {
+                return true;
+            }
+            if accuracy == b.accuracy && score == b.score {
+                return entry.name.len() > b.name.len();
+            }
+            false
+        }).unwrap_or(true);
         if replace {
             best = Some(match_result_from_entry(entry, accuracy, score));
         }
@@ -74,12 +82,15 @@ fn score_entry(observed: &Fingerprint, mp: &MatchPoints, entry: &OsEntry) -> (u3
     let mut max_score = 0u32;
 
     for (test_name, weights) in &mp.weights {
-        let obs_block = observed.test_block(test_name);
+        let obs_block = match observed.test_block(test_name) {
+            Some(b) if !b.is_empty() => b,
+            _ => continue,
+        };
         let db_block = entry.tests.get(test_name);
 
         for (field, weight) in weights {
             max_score += weight;
-            let obs_val = obs_block.and_then(|b| b.get(field)).map(|s| s.as_str());
+            let obs_val = obs_block.get(field).map(|s| s.as_str());
             let db_val = db_block
                 .and_then(|b| b.fields.get(field))
                 .map(|s| s.as_str());
@@ -87,7 +98,11 @@ fn score_entry(observed: &Fingerprint, mp: &MatchPoints, entry: &OsEntry) -> (u3
             match (obs_val, db_val) {
                 (Some(o), Some(d)) if field_matches(o, d) => score += weight,
                 (None, Some(d)) if d == "N" || d.starts_with("N|") => score += weight,
+                (Some(o), Some(d)) if o.is_empty() && (d == "N" || d.contains('N')) => {
+                    score += weight
+                }
                 (Some("N"), Some(d)) if d.contains('N') || d.starts_with("R=N") => score += weight,
+                (None, None) => score += weight,
                 _ => {}
             }
         }
