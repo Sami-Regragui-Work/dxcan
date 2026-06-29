@@ -1,0 +1,14 @@
+{
+  "updated_at": "2026-06-29T22:40:02.317226+00:00",
+  "updated_at_epoch": 1782772802,
+  "interval_days": 7,
+  "base_file": "/home/frogsam/D/YouCode/DXC/Rust-attempt/src/scanners/network/vhost/vhost-base.txt",
+  "base_source": "/usr/share/nmap/nselib/data/vhosts-full.lst",
+  "base_mtime_epoch": 1782772802,
+  "base_entries": 497,
+  "extras_file": "/home/frogsam/D/YouCode/DXC/Rust-attempt/src/scanners/network/vhost/vhost-extras.txt",
+  "extras_entries": 121,
+  "merged_file": "/home/frogsam/D/YouCode/DXC/Rust-attempt/src/scanners/network/vhost/vhost-wordlist.txt",
+  "merged_entries": 618,
+  "nmap_version": "version"
+}

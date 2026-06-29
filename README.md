@@ -6,7 +6,7 @@ Rust port scanner with optional service detection, role labels, and nmap-style O
 
 - Rust toolchain (`cargo`, edition 2021)
 - Linux with raw sockets for SYN scans and `--os` (run with `sudo` or `CAP_NET_RAW`)
-- **[Nmap](https://nmap.org/)** installed — provides `/usr/share/nmap/nmap-os-db`, used at build time and for `--os` at runtime
+- **[Nmap](https://nmap.org/)** installed — provides `/usr/share/nmap/nmap-os-db` and `/usr/share/nmap/nselib/data/vhosts-full.lst`, used at build time; `--os` and `--vhost` prefer live files at runtime
 
 Optional override:
 
@@ -21,7 +21,18 @@ cargo build --release
 cargo install --path . --force
 ```
 
-Build embeds a snapshot of the nmap OS database from the paths above. At runtime, dxcan prefers the live file on disk (so upgrading nmap updates fingerprints without rebuilding).
+Build embeds a snapshot of the nmap OS database and the vendored vhost wordlist under `src/scanners/network/vhost/`. Refresh that list from upstream nmap with `./scripts/update-vhost-wordlist.sh` (weekly by default; not on every build).
+
+Optional overrides:
+
+```bash
+export DXCAN_OS_DB=/path/to/nmap-os-db
+export DXCAN_VHOST_WORDLIST=/path/to/custom-wordlist.txt
+export DXCAN_VHOST_LIVE=1
+export DXCAN_VHOST_UPDATE_DAYS=7
+```
+
+`DXCAN_VHOST_LIVE=1` merges from the installed nmap list at runtime instead of the vendored snapshot.
 
 Use the built binary without installing globally:
 
@@ -99,6 +110,13 @@ JSON:
 
 ```bash
 dxcan -H scanme.nmap.org -p 22,80 --service-version --json
+```
+
+Virtual host discovery (default wordlist: vendored nmap `vhosts-full.lst` + extras; refresh with `./scripts/update-vhost-wordlist.sh`):
+
+```bash
+dxcan -H scanme.nmap.org -p 80 --vhost
+dxcan -H scanme.nmap.org -p 80 --vhost --vhost-wordlist /path/to/custom.txt
 ```
 
 ## Binaries
