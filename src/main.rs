@@ -519,7 +519,7 @@ async fn run_domain_only(args: &Args) {
         .unwrap_or_else(|| args.workers.max(50).min(500));
     let query_secs = args
         .domain_query_timeout
-        .unwrap_or_else(|| args.timeout.min(1.5).max(0.5));
+        .unwrap_or_else(|| args.timeout.min(1.0).max(0.5));
     let query_timeout = std::time::Duration::from_secs_f64(query_secs);
     let query_aaaa = args.domain_aaaa || args.domain_rich;
     let show_cname = args.domain_rich;
