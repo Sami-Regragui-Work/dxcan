@@ -53,8 +53,7 @@ pub fn resolve_wordlist_path() -> Option<PathBuf> {
 
 fn load_default_wordlist_raw() -> Result<String, String> {
     if let Some(path) = resolve_wordlist_path() {
-        return fs::read_to_string(&path)
-            .map_err(|e| format!("wordlist {}: {e}", path.display()));
+        return fs::read_to_string(&path).map_err(|e| format!("wordlist {}: {e}", path.display()));
     }
     Ok(EMBEDDED_WORDLIST.to_string())
 }
@@ -82,10 +81,7 @@ mod tests {
 
     #[test]
     fn expand_percent_s() {
-        assert_eq!(
-            expand_hostname("www.%s", "example.com"),
-            "www.example.com"
-        );
+        assert_eq!(expand_hostname("www.%s", "example.com"), "www.example.com");
     }
 
     #[test]

@@ -146,8 +146,13 @@ async fn probe_plain_cached(
     }
     let request = build_request(host_header, path, true);
     let mut buf = vec![0u8; 65536];
-    let read_result =
-        read_response(stream.as_mut().unwrap(), &request, &mut buf, request_timeout).await;
+    let read_result = read_response(
+        stream.as_mut().unwrap(),
+        &request,
+        &mut buf,
+        request_timeout,
+    )
+    .await;
     let n = match read_result {
         Ok(n) => n,
         Err(e) => {
@@ -373,9 +378,10 @@ fn header_content_length(headers: &str) -> Option<usize> {
 }
 
 fn header_is_chunked(headers: &str) -> bool {
-    headers
-        .lines()
-        .any(|line| line.to_ascii_lowercase().contains("transfer-encoding:") && line.to_ascii_lowercase().contains("chunked"))
+    headers.lines().any(|line| {
+        line.to_ascii_lowercase().contains("transfer-encoding:")
+            && line.to_ascii_lowercase().contains("chunked")
+    })
 }
 
 fn decode_chunked(data: &[u8]) -> Option<Vec<u8>> {

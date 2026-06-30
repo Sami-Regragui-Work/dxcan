@@ -34,11 +34,7 @@ pub fn lengths_differ(a: usize, b: usize, margin: usize) -> bool {
     a.abs_diff(b) > margin
 }
 
-pub fn length_only_diff(
-    candidate: &HttpResponse,
-    baseline: &HttpResponse,
-    margin: usize,
-) -> bool {
+pub fn length_only_diff(candidate: &HttpResponse, baseline: &HttpResponse, margin: usize) -> bool {
     candidate.status == baseline.status
         && lengths_differ(candidate.body_len, baseline.body_len, margin)
         && candidate.location == baseline.location
@@ -92,8 +88,8 @@ pub fn is_actionable_hit(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::probe::HttpResponse;
+    use super::*;
 
     fn resp(status: u16, len: usize, hash: u64, loc: Option<&str>) -> HttpResponse {
         HttpResponse {
