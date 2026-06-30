@@ -61,6 +61,18 @@ fn merge_wordlist_fallback(base: &Path, extras: &str) -> String {
     entries.into_iter().collect::<Vec<_>>().join("\n") + "\n"
 }
 
+fn copy_resolvers_sidecar(manifest: &Path) {
+    let src = manifest.join("src/scanners/network/domain/resolvers-default.txt");
+    if !src.is_file() {
+        return;
+    }
+    let dest = manifest.join("target/resolvers.txt");
+    if let Some(parent) = dest.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::copy(&src, &dest);
+}
+
 fn write_vhost_wordlist(out_dir: &Path) {
     let dest = out_dir.join("vhost-wordlist.txt");
     let canonical = Path::new(VHOST_CANONICAL);
@@ -122,4 +134,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", src.display());
     println!("cargo:rerun-if-env-changed=DXCAN_OS_DB");
     write_vhost_wordlist(Path::new(&out_dir));
+    if let Ok(manifest) = env::var("CARGO_MANIFEST_DIR") {
+        copy_resolvers_sidecar(Path::new(&manifest));
+    }
 }

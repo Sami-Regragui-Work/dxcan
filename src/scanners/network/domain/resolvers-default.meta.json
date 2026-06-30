@@ -1,14 +1,14 @@
 {
-  "updated_at": "2026-06-30T13:03:01.794436+00:00",
-  "updated_at_epoch": 1782824581,
+  "updated_at": "2026-06-30T13:35:01.264890+00:00",
+  "updated_at_epoch": 1782826501,
   "interval_days": 7,
-  "base_file": "src/scanners/network/domain/resolvers-base.txt",
-  "base_source": "extras-only",
-  "base_url": "",
-  "base_mtime_epoch": 1782824563,
-  "base_entries": 0,
-  "extras_file": "src/scanners/network/domain/resolvers-extras.txt",
-  "extras_entries": 8,
-  "merged_file": "src/scanners/network/domain/resolvers-default.txt",
-  "merged_entries": 8
+  "base_file": "/home/frogsam/D/YouCode/DXC/Rust-attempt/src/scanners/network/domain/resolvers-base.txt",
+  "base_source": "[fetch] https://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt -> /home/frogsam/D/YouCode/DXC/Rust-attempt/src/scanners/network/domain/resolvers-base.txt\nhttps://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt",
+  "base_url": "https://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt",
+  "base_mtime_epoch": 1782826501,
+  "base_entries": 16204,
+  "extras_file": "/home/frogsam/D/YouCode/DXC/Rust-attempt/src/scanners/network/domain/resolvers-extras.txt",
+  "extras_entries": 0,
+  "merged_file": "/home/frogsam/D/YouCode/DXC/Rust-attempt/src/scanners/network/domain/resolvers-default.txt",
+  "merged_entries": 16204
 }

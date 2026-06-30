@@ -15,7 +15,7 @@ mod wordlist;
 
 pub use wordlist::{expand_hostname, load_wordlist};
 use dns::{build_client, format_ip, DnsAnswer, DnsClient};
-use resolvers::load_resolver_ips;
+use resolvers::{compute_max_inflight, load_resolver_ips};
 use wildcard::{detect_wildcard_ips, is_wildcard_hit, random_label};
 
 #[derive(Debug, Clone)]
@@ -31,6 +31,7 @@ pub struct DomainOptions {
     pub show_cname: bool,
     pub show_ttl: bool,
     pub dev: bool,
+    pub max_inflight: Option<usize>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -113,10 +114,11 @@ pub async fn discover_domains(opts: &DomainOptions) -> Result<DomainDiscoverResu
     let (resolver_ips, resolver_source) =
         load_resolver_ips(opts.resolvers_path.as_deref(), opts.dev)?;
     let rich = opts.query_aaaa || opts.show_cname || opts.show_ttl;
-    let max_inflight = opts
-        .workers
-        .min(resolver_ips.len().saturating_mul(8))
-        .clamp(24, 72);
+    let max_inflight = compute_max_inflight(
+        opts.workers,
+        resolver_ips.len(),
+        opts.max_inflight,
+    );
     let client = Arc::new(
         build_client(
             &resolver_ips,

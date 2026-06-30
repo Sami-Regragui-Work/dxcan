@@ -133,6 +133,7 @@ dxcan -H example.com -p 53 --domain --domain-rich
 |------|---------|
 | `--dev` | Smoke wordlist + dev resolver list for local testing |
 | `--domain-resolvers` | Explicit resolver file (overrides embedded defaults) |
+| `--domain-max-inflight` | Cap concurrent UDP DNS queries (default scales with pool size) |
 | `DXCAN_DOMAIN_RESOLVERS` | Same as `--domain-resolvers` via env |
 | `--domain-rich` | CNAME/TTL/AAAA via Hickory (slower, richer) |
 

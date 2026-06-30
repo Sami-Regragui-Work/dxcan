@@ -536,6 +536,7 @@ async fn run_domain_only(args: &Args) {
         show_cname,
         show_ttl,
         dev: args.dev,
+        max_inflight: args.domain_max_inflight,
     };
 
     let result = match discover_domains(&opts).await {
@@ -631,6 +632,9 @@ async fn run_domain_only(args: &Args) {
     if args.debug {
         println!("\n--- debug ---");
         println!("domain resolvers: {}", result.resolver_source);
+        if let Some(limit) = args.domain_max_inflight {
+            println!("domain max_inflight: {limit}");
+        }
         println!(
             "domain total:    {}",
             display::fmt_duration(result.detection_ms, true)

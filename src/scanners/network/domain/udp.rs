@@ -15,7 +15,8 @@ use tokio::time;
 use super::DnsAnswer;
 
 const SOCKET_BUF_BYTES: i32 = 4 * 1024 * 1024;
-const LANE_COUNT: usize = 4;
+const MIN_LANES: usize = 4;
+const MAX_LANES: usize = 8;
 
 type PendingMap = HashMap<u16, oneshot::Sender<Vec<u8>>>;
 
@@ -25,7 +26,7 @@ struct UdpLane {
 }
 
 pub struct UdpDnsClient {
-    lanes: Arc<[UdpLane; LANE_COUNT]>,
+    lanes: Arc<Vec<UdpLane>>,
     resolvers: Vec<SocketAddr>,
     next_resolver: AtomicUsize,
     next_lane: AtomicUsize,
@@ -68,6 +69,10 @@ async fn build_lane() -> Result<UdpLane, String> {
     })
 }
 
+fn lane_count_for(resolver_count: usize) -> usize {
+    resolver_count.clamp(MIN_LANES, MAX_LANES)
+}
+
 pub async fn build_udp_client(
     ips: &[IpAddr],
     timeout: Duration,
@@ -77,14 +82,12 @@ pub async fn build_udp_client(
         return Err("no DNS resolvers configured".into());
     }
     let resolvers: Vec<SocketAddr> = ips.iter().map(|ip| SocketAddr::new(*ip, 53)).collect();
-    let mut lanes = Vec::with_capacity(LANE_COUNT);
-    for _ in 0..LANE_COUNT {
+    let lane_count = lane_count_for(resolvers.len());
+    let mut lanes = Vec::with_capacity(lane_count);
+    for _ in 0..lane_count {
         lanes.push(build_lane().await?);
     }
-    let lanes_arr: [UdpLane; LANE_COUNT] = lanes
-        .try_into()
-        .map_err(|_| "lane init failed".to_string())?;
-    let lanes = Arc::new(lanes_arr);
+    let lanes = Arc::new(lanes);
     for lane in lanes.iter() {
         spawn_reader(lane.socket.clone(), lane.pending.clone());
     }
@@ -119,17 +122,14 @@ fn spawn_reader(socket: Arc<UdpSocket>, pending: Arc<Mutex<PendingMap>>) {
 }
 
 impl UdpDnsClient {
-    fn pick_resolver_for_lane(&self, lane_idx: usize) -> SocketAddr {
-        self.resolvers[lane_idx % self.resolvers.len()]
-    }
-
     fn pick_resolver(&self) -> SocketAddr {
         let idx = self.next_resolver.fetch_add(1, Ordering::Relaxed);
         self.resolvers[idx % self.resolvers.len()]
     }
 
     fn pick_lane(&self) -> usize {
-        self.next_lane.fetch_add(1, Ordering::Relaxed) % LANE_COUNT
+        let lane_count = self.lanes.len().max(1);
+        self.next_lane.fetch_add(1, Ordering::Relaxed) % lane_count
     }
 
     fn next_query_id(&self) -> u16 {
@@ -183,7 +183,7 @@ impl UdpDnsClient {
             .map_err(|_| format!("{fqdn}: closed"))?;
         let lane_idx = self.pick_lane();
         let id = self.next_query_id();
-        let resolver = self.pick_resolver_for_lane(lane_idx);
+        let resolver = self.pick_resolver();
         match self.send_and_wait(fqdn, id, resolver, lane_idx).await {
             Ok(payload) => parse_a_response(&payload, fqdn),
             Err(first) if first.ends_with(": timeout") => {

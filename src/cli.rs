@@ -127,6 +127,9 @@ pub struct Args {
     #[arg(long = "domain-rich")]
     pub domain_rich: bool,
 
+    #[arg(long = "domain-max-inflight")]
+    pub domain_max_inflight: Option<usize>,
+
     #[arg(long, help = "Smoke wordlists and dev resolver lists for local testing")]
     pub dev: bool,
 
