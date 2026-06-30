@@ -113,7 +113,19 @@ pub async fn discover_domains(opts: &DomainOptions) -> Result<DomainDiscoverResu
     let (resolver_ips, resolver_source) =
         load_resolver_ips(opts.resolvers_path.as_deref(), opts.dev)?;
     let rich = opts.query_aaaa || opts.show_cname || opts.show_ttl;
-    let client = Arc::new(build_client(&resolver_ips, opts.query_timeout, rich).await?);
+    let max_inflight = opts
+        .workers
+        .min(resolver_ips.len().saturating_mul(8))
+        .clamp(24, 72);
+    let client = Arc::new(
+        build_client(
+            &resolver_ips,
+            opts.query_timeout,
+            rich,
+            max_inflight,
+        )
+        .await?,
+    );
 
     let wildcard_set = if opts.filter_wildcard {
         detect_wildcard_ips(

@@ -59,12 +59,6 @@ fn load_default_wordlist_raw() -> Result<String, String> {
     Ok(EMBEDDED_WORDLIST.to_string())
 }
 
-fn merge_wordlist_text(base: &str, extras: &str) -> String {
-    let mut entries = parse_wordlist_set(base);
-    entries.extend(parse_wordlist_set(extras));
-    entries.into_iter().collect::<Vec<_>>().join("\n") + "\n"
-}
-
 fn parse_wordlist_set(raw: &str) -> BTreeSet<String> {
     raw.lines()
         .map(str::trim)
@@ -104,7 +98,9 @@ mod tests {
 
     #[test]
     fn merge_dedupes_and_sorts() {
-        let merged = merge_wordlist_text("zebra\nwww\n", "api\nwww\n");
+        let mut entries = parse_wordlist_set("zebra\nwww\n");
+        entries.extend(parse_wordlist_set("api\nwww\n"));
+        let merged = entries.into_iter().collect::<Vec<_>>().join("\n") + "\n";
         assert_eq!(merged, "api\nwww\nzebra\n");
     }
 

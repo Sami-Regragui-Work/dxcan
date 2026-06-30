@@ -136,12 +136,13 @@ pub async fn build_client(
     ips: &[IpAddr],
     query_timeout: Duration,
     rich: bool,
+    max_inflight: usize,
 ) -> Result<DnsClient, String> {
     if rich {
         Ok(DnsClient::Hickory(build_hickory_client(ips, query_timeout)?))
     } else {
         Ok(DnsClient::Udp(
-            super::udp::build_udp_client(ips, query_timeout).await?,
+            super::udp::build_udp_client(ips, query_timeout, max_inflight).await?,
         ))
     }
 }

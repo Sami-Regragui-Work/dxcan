@@ -61,9 +61,7 @@ fn bind_udp_socket() -> Result<StdUdpSocket, String> {
 
 async fn build_lane() -> Result<UdpLane, String> {
     let std_socket = bind_udp_socket()?;
-    let socket = Arc::new(
-        UdpSocket::from_std(std_socket).map_err(|e| format!("udp tokio: {e}"))?,
-    );
+    let socket = Arc::new(UdpSocket::from_std(std_socket).map_err(|e| format!("udp tokio: {e}"))?);
     Ok(UdpLane {
         socket: socket.clone(),
         pending: Arc::new(Mutex::new(PendingMap::new())),
@@ -73,6 +71,7 @@ async fn build_lane() -> Result<UdpLane, String> {
 pub async fn build_udp_client(
     ips: &[IpAddr],
     timeout: Duration,
+    max_inflight: usize,
 ) -> Result<Arc<UdpDnsClient>, String> {
     if ips.is_empty() {
         return Err("no DNS resolvers configured".into());
@@ -96,7 +95,7 @@ pub async fn build_udp_client(
         next_lane: AtomicUsize::new(0),
         next_id: AtomicU16::new(1),
         timeout,
-        inflight: Arc::new(Semaphore::new(100)),
+        inflight: Arc::new(Semaphore::new(max_inflight.max(1))),
     }))
 }
 
@@ -120,6 +119,10 @@ fn spawn_reader(socket: Arc<UdpSocket>, pending: Arc<Mutex<PendingMap>>) {
 }
 
 impl UdpDnsClient {
+    fn pick_resolver_for_lane(&self, lane_idx: usize) -> SocketAddr {
+        self.resolvers[lane_idx % self.resolvers.len()]
+    }
+
     fn pick_resolver(&self) -> SocketAddr {
         let idx = self.next_resolver.fetch_add(1, Ordering::Relaxed);
         self.resolvers[idx % self.resolvers.len()]
@@ -180,19 +183,26 @@ impl UdpDnsClient {
             .map_err(|_| format!("{fqdn}: closed"))?;
         let lane_idx = self.pick_lane();
         let id = self.next_query_id();
-        let resolver = self.pick_resolver();
+        let resolver = self.pick_resolver_for_lane(lane_idx);
         match self.send_and_wait(fqdn, id, resolver, lane_idx).await {
             Ok(payload) => parse_a_response(&payload, fqdn),
             Err(first) if first.ends_with(": timeout") => {
+                let retry_timeout =
+                    Duration::from_secs_f64(self.timeout.as_secs_f64() / 2.0);
+                if retry_timeout < Duration::from_millis(200) {
+                    return Err(first);
+                }
                 let lane_idx = self.pick_lane();
                 let id = self.next_query_id();
                 let resolver = self.pick_resolver();
-                match self
-                    .send_and_wait(fqdn, id, resolver, lane_idx)
-                    .await
+                match time::timeout(
+                    retry_timeout,
+                    self.send_and_wait(fqdn, id, resolver, lane_idx),
+                )
+                .await
                 {
-                    Ok(payload) => parse_a_response(&payload, fqdn),
-                    Err(_) => Err(first),
+                    Ok(Ok(payload)) => parse_a_response(&payload, fqdn),
+                    Ok(Err(_)) | Err(_) => Err(first),
                 }
             }
             Err(other) => Err(other),
