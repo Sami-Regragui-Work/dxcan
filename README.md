@@ -21,18 +21,19 @@ cargo build --release
 cargo install --path . --force
 ```
 
-Build embeds a snapshot of the nmap OS database and the vendored vhost wordlist under `src/scanners/network/vhost/`. Refresh that list from upstream nmap with `./scripts/update-vhost-wordlist.sh` (weekly by default; not on every build).
+Build embeds a snapshot of the nmap OS database, the vendored vhost wordlist, and the vendored domain resolver list. Refresh those with `./scripts/update-vhost-wordlist.sh` and `./scripts/update-domain-resolvers.sh` (weekly by default; not on every build).
 
 Optional overrides:
 
 ```bash
 export DXCAN_OS_DB=/path/to/nmap-os-db
 export DXCAN_VHOST_WORDLIST=/path/to/custom-wordlist.txt
-export DXCAN_VHOST_LIVE=1
 export DXCAN_VHOST_UPDATE_DAYS=7
+export DXCAN_DOMAIN_UPDATE_DAYS=7
+export DXCAN_DOMAIN_RESOLVERS=/path/to/resolvers.txt
 ```
 
-`DXCAN_VHOST_LIVE=1` merges from the installed nmap list at runtime instead of the vendored snapshot.
+Use `--dev` for small smoke wordlists and dev resolver lists during local testing and bench runs.
 
 Use the built binary without installing globally:
 
@@ -118,6 +119,24 @@ Virtual host discovery (default wordlist: vendored nmap `vhosts-full.lst` + extr
 dxcan -H scanme.nmap.org -p 80 --vhost
 dxcan -H scanme.nmap.org -p 80 --vhost --vhost-wordlist /path/to/custom.txt
 ```
+
+Domain discovery (default: vendored resolver list from `./scripts/update-domain-resolvers.sh`; use `--dev` for smoke lists):
+
+```bash
+dxcan -H example.com -p 53 --domain
+dxcan -H example.com -p 53 --domain --dev
+dxcan -H example.com -p 53 --domain --domain-resolvers ~/.config/dxcan/resolvers.txt
+dxcan -H example.com -p 53 --domain --domain-rich
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--dev` | Smoke wordlist + dev resolver list for local testing |
+| `--domain-resolvers` | Explicit resolver file (overrides embedded defaults) |
+| `DXCAN_DOMAIN_RESOLVERS` | Same as `--domain-resolvers` via env |
+| `--domain-rich` | CNAME/TTL/AAAA via Hickory (slower, richer) |
+
+Production resolver list: refresh with `./scripts/update-domain-resolvers.sh` (Trickest public list + extras, vendored into the binary). Bench runs pass `--domain-resolvers bench/resolvers.txt` explicitly.
 
 ## Binaries
 

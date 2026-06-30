@@ -34,6 +34,19 @@ pub struct VhostEntry {
     pub latency_ms: f64,
 }
 
+#[derive(Serialize, Clone)]
+pub struct DomainEntry {
+    pub fqdn: String,
+    pub ips: Vec<String>,
+    pub latency_ms: f64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub aaaa: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<u32>,
+}
+
 #[derive(Serialize)]
 pub struct ScanOutput {
     pub tool:       String,
@@ -78,4 +91,14 @@ pub struct ScanOutput {
     pub vhost_baseline_lines: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vhost_baseline_words: Option<usize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub domains: Vec<DomainEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_probed: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_elapsed_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub domain_wildcard_ips: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_resolver_source: Option<String>,
 }

@@ -99,6 +99,8 @@ fn write_vhost_wordlist(out_dir: &Path) {
     }
     println!("cargo:rerun-if-changed={VHOST_CANONICAL}");
     println!("cargo:rerun-if-changed=src/scanners/network/vhost/vhost-extras.txt");
+    println!("cargo:rerun-if-changed=src/scanners/network/domain/resolvers-default.txt");
+    println!("cargo:rerun-if-changed=src/scanners/network/domain/resolvers-dev.txt");
     println!("cargo:rerun-if-env-changed=DXCAN_VHOST_WORDLIST_BASE");
 }
 

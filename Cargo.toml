@@ -1,6 +1,6 @@
 [package]
 name    = "dxcan"
-version = "0.8.1"
+version = "0.9.3"
 edition = "2021"
 
 [[bin]]
@@ -27,3 +27,4 @@ dns-lookup   = "2"
 libc         = "0.2"
 tokio-rustls = "0.26"
 webpki-roots = "0.26"
+hickory-resolver = { version = "0.26.1", features = ["tokio"] }

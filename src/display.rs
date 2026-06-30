@@ -1,9 +1,10 @@
-use crate::output::{PortEntry, VhostEntry};
+use crate::output::{DomainEntry, PortEntry, VhostEntry};
 
 pub struct DisplayOpts {
     pub service_version: bool,
     pub role_labels: bool,
     pub precise: bool,
+    pub domain_rich: bool,
 }
 
 pub fn print_port_table(entries: &[PortEntry], opts: &DisplayOpts) {
@@ -116,6 +117,82 @@ pub fn print_vhost_results(
             truncate_pad(&h.body_hash, cols[5].1),
             truncate_pad(loc, cols[6].1),
             truncate_pad(&fmt_duration(h.latency_ms, opts.precise), cols[7].1),
+        ]
+        .join(" ");
+        println!("{row}");
+    }
+}
+
+pub fn print_domain_results(
+    hits: &[DomainEntry],
+    apex: &str,
+    probed: usize,
+    wildcard_ips: &[String],
+    opts: &DisplayOpts,
+) {
+    println!();
+    if wildcard_ips.is_empty() {
+        println!("Subdomains of {apex} (probed {probed}, no wildcard baseline):");
+    } else {
+        println!(
+            "Subdomains of {apex} (probed {probed}, wildcard baseline: {}):",
+            wildcard_ips.join(", ")
+        );
+    }
+    if hits.is_empty() {
+        println!("  (none)");
+        return;
+    }
+    if opts.domain_rich {
+        let cols: [(&str, usize); 6] = [
+            ("FQDN", 36),
+            ("A", 18),
+            ("AAAA", 24),
+            ("CNAME", 24),
+            ("TTL", 8),
+            ("LATENCY", 13),
+        ];
+        let header: String = cols
+            .iter()
+            .map(|(name, w)| format!("{name:<w$}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let width: usize =
+            cols.iter().map(|(_, w)| *w).sum::<usize>() + cols.len().saturating_sub(1);
+        println!("{header}");
+        println!("{}", "-".repeat(width));
+        for h in hits {
+            let row = [
+                truncate_pad(&h.fqdn, cols[0].1),
+                truncate_pad(&h.ips.join(","), cols[1].1),
+                truncate_pad(&h.aaaa.join(","), cols[2].1),
+                truncate_pad(h.cname.as_deref().unwrap_or(""), cols[3].1),
+                truncate_pad(&h.ttl.map(|t| t.to_string()).unwrap_or_default(), cols[4].1),
+                truncate_pad(&fmt_duration(h.latency_ms, opts.precise), cols[5].1),
+            ]
+            .join(" ");
+            println!("{row}");
+        }
+        return;
+    }
+    let cols: [(&str, usize); 3] = [
+        ("FQDN", 40),
+        ("IPS", 36),
+        ("LATENCY", 13),
+    ];
+    let header: String = cols
+        .iter()
+        .map(|(name, w)| format!("{name:<w$}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let width: usize = cols.iter().map(|(_, w)| *w).sum::<usize>() + cols.len().saturating_sub(1);
+    println!("{header}");
+    println!("{}", "-".repeat(width));
+    for h in hits {
+        let row = [
+            truncate_pad(&h.fqdn, cols[0].1),
+            truncate_pad(&h.ips.join(","), cols[1].1),
+            truncate_pad(&fmt_duration(h.latency_ms, opts.precise), cols[2].1),
         ]
         .join(" ");
         println!("{row}");

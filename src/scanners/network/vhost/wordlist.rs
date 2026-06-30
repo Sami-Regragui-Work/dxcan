@@ -3,14 +3,13 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const VHOST_EXTRAS: &str = include_str!("vhost-extras.txt");
+const DEV_WORDLIST: &str = include_str!("vhost-smoke.txt");
 const EMBEDDED_WORDLIST: &str = include_str!(concat!(env!("OUT_DIR"), "/vhost-wordlist.txt"));
 
-pub const NMAP_VHOSTS_FULL: &str = "/usr/share/nmap/nselib/data/vhosts-full.lst";
-
-pub fn load_wordlist(path: Option<&Path>) -> Result<Vec<String>, String> {
+pub fn load_wordlist(path: Option<&Path>, dev: bool) -> Result<Vec<String>, String> {
     let raw = match path {
         Some(p) => fs::read_to_string(p).map_err(|e| format!("wordlist {}: {e}", p.display()))?,
+        None if dev => DEV_WORDLIST.to_string(),
         None => load_default_wordlist_raw()?,
     };
     Ok(parse_wordlist_lines(&raw))
@@ -37,16 +36,6 @@ pub fn resolve_wordlist_path() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    if live_merge_enabled() {
-        for candidate in [
-            PathBuf::from(NMAP_VHOSTS_FULL),
-            PathBuf::from("/usr/local/share/nmap/nselib/data/vhosts-full.lst"),
-        ] {
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
     if let Ok(exe) = env::current_exe() {
         if let Some(dir) = exe.parent() {
             let sidecar = dir.join("vhost-wordlist.txt");
@@ -62,28 +51,12 @@ pub fn resolve_wordlist_path() -> Option<PathBuf> {
     None
 }
 
-fn live_merge_enabled() -> bool {
-    matches!(
-        env::var("DXCAN_VHOST_LIVE").as_deref(),
-        Ok("1") | Ok("true") | Ok("yes")
-    )
-}
-
 fn load_default_wordlist_raw() -> Result<String, String> {
     if let Some(path) = resolve_wordlist_path() {
-        if live_merge_enabled() && is_nmap_vhost_base(&path) {
-            let base = fs::read_to_string(&path)
-                .map_err(|e| format!("wordlist {}: {e}", path.display()))?;
-            return Ok(merge_wordlist_text(&base, VHOST_EXTRAS));
-        }
         return fs::read_to_string(&path)
             .map_err(|e| format!("wordlist {}: {e}", path.display()));
     }
     Ok(EMBEDDED_WORDLIST.to_string())
-}
-
-fn is_nmap_vhost_base(path: &Path) -> bool {
-    path.ends_with("vhosts-full.lst")
 }
 
 fn merge_wordlist_text(base: &str, extras: &str) -> String {
@@ -100,7 +73,7 @@ fn parse_wordlist_set(raw: &str) -> BTreeSet<String> {
         .collect()
 }
 
-fn parse_wordlist_lines(raw: &str) -> Vec<String> {
+pub fn parse_wordlist_lines(raw: &str) -> Vec<String> {
     parse_wordlist_set(raw).into_iter().collect()
 }
 
@@ -159,18 +132,8 @@ mod tests {
     }
 
     #[test]
-    fn loads_live_nmap_vhost_base_when_enabled() {
-        if !live_merge_enabled() {
-            return;
-        }
-        let Some(path) = resolve_wordlist_path() else {
-            return;
-        };
-        if !is_nmap_vhost_base(&path) {
-            return;
-        }
-        let raw = fs::read_to_string(&path).expect("read nmap vhosts-full");
-        let lines = parse_wordlist_lines(&merge_wordlist_text(&raw, VHOST_EXTRAS));
-        assert!(lines.len() > 400);
+    fn dev_wordlist_nonempty() {
+        let lines = parse_wordlist_lines(DEV_WORDLIST);
+        assert!(lines.len() >= 8);
     }
 }

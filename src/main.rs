@@ -11,12 +11,14 @@ use std::time::Instant;
 
 use cli::Args;
 use display::{
-    print_open_ports_summary, print_os_details, print_port_table, print_vhost_results, DisplayOpts,
+    print_domain_results, print_open_ports_summary, print_os_details, print_port_table,
+    print_vhost_results, DisplayOpts,
 };
-use output::{PortEntry, ScanOutput, VhostEntry};
+use output::{DomainEntry, PortEntry, ScanOutput, VhostEntry};
 use resolver::{resolve_host, reverse_dns};
 use scanners::network::port::{parse_ports, run_port_scan, scan_mode, PortResult, ScanPlan};
 use scanners::network::{
+    domain::{discover_domains, normalize_apex, DomainOptions},
     os::detect_os,
     service::{port_label, product_hint_from_banner, service_role_label, ServiceProber},
     vhost::{discover_vhosts, parse_status_list, parse_usize_list, pick_http_ports, resolve_base_domain, VhostOptions},
@@ -36,6 +38,14 @@ async fn main() {
     let t0 = Instant::now();
 
     let args = Args::parse();
+    if args.domain && args.vhost {
+        eprintln!("[error] --domain and --vhost are mutually exclusive");
+        std::process::exit(1);
+    }
+    if args.domain {
+        run_domain_only(&args).await;
+        return;
+    }
     if args.product_hints && !args.os_detect && !args.os_rich {
         eprintln!("[error] --product-hints requires --os (or use --os-rich)");
         std::process::exit(1);
@@ -239,6 +249,7 @@ async fn main() {
                 length_margin: args.vhost_length_margin,
                 ignore_lengths: ignore_lengths.clone(),
                 ignore_statuses: ignore_statuses.clone(),
+                dev: args.dev,
             };
             match discover_vhosts(&opts).await {
                 Ok(r) => {
@@ -372,6 +383,11 @@ async fn main() {
             } else {
                 None
             },
+            domains: Vec::new(),
+            domain_probed: None,
+            domain_elapsed_ms: None,
+            domain_wildcard_ips: Vec::new(),
+            domain_resolver_source: None,
         };
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     } else {
@@ -389,6 +405,7 @@ async fn main() {
             service_version,
             role_labels,
             precise: args.precise,
+            domain_rich: false,
         };
         print_port_table(&display, &table_opts);
 
@@ -490,4 +507,137 @@ fn compute_info_level(open_entries: &[&PortEntry], has_reverse_dns: bool) -> u32
         }
     }
     info_level
+}
+
+async fn run_domain_only(args: &Args) {
+    let t0 = Instant::now();
+    let apex = normalize_apex(&args.host);
+    let wordlist_path = args.domain_wordlist.as_ref().map(std::path::PathBuf::from);
+    let resolvers_path = args.domain_resolvers.as_ref().map(std::path::PathBuf::from);
+    let workers = args
+        .domain_workers
+        .unwrap_or_else(|| args.workers.max(50).min(500));
+    let query_secs = args
+        .domain_query_timeout
+        .unwrap_or_else(|| args.timeout.min(1.5).max(0.5));
+    let query_timeout = std::time::Duration::from_secs_f64(query_secs);
+    let query_aaaa = args.domain_aaaa || args.domain_rich;
+    let show_cname = args.domain_rich;
+    let show_ttl = args.domain_rich;
+    let opts = DomainOptions {
+        apex: apex.clone(),
+        wordlist_path,
+        resolvers_path,
+        workers,
+        query_timeout,
+        wildcard_samples: args.domain_wildcard_samples,
+        filter_wildcard: !args.domain_no_wildcard_filter,
+        query_aaaa,
+        show_cname,
+        show_ttl,
+        dev: args.dev,
+    };
+
+    let result = match discover_domains(&opts).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[error] domain discovery: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let domain_entries: Vec<DomainEntry> = result
+        .hits
+        .iter()
+        .map(|h| DomainEntry {
+            fqdn: h.fqdn.clone(),
+            ips: h.ips.clone(),
+            latency_ms: h.latency_ms,
+            aaaa: h.aaaa.clone(),
+            cname: h.cname.clone(),
+            ttl: h.ttl,
+        })
+        .collect();
+
+    let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let mut info_level = domain_entries.len() as u32;
+    for e in &domain_entries {
+        info_level += e.ips.len() as u32;
+        info_level += e.aaaa.len() as u32;
+        if e.cname.is_some() {
+            info_level += 1;
+        }
+        if e.ttl.is_some() {
+            info_level += 1;
+        }
+    }
+
+    if args.json {
+        let output = ScanOutput {
+            tool: "dxcan".into(),
+            host: args.host.clone(),
+            ip: String::new(),
+            reverse_dns: None,
+            elapsed_ms: wall_ms,
+            scanned: 0,
+            shown: 0,
+            results: Vec::new(),
+            info_level,
+            os_guess: None,
+            os_accuracy: None,
+            os_vendor: None,
+            os_family: None,
+            os_gen: None,
+            os_device_type: None,
+            os_running: None,
+            os_cpes: Vec::new(),
+            vhosts: Vec::new(),
+            vhost_probed: None,
+            vhost_port: None,
+            vhost_tls: None,
+            vhost_elapsed_ms: None,
+            vhost_baseline_hash: None,
+            vhost_baseline_lines: None,
+            vhost_baseline_words: None,
+            domains: domain_entries.clone(),
+            domain_probed: Some(result.probed),
+            domain_elapsed_ms: Some(result.detection_ms),
+            domain_wildcard_ips: result.wildcard_ips.clone(),
+            domain_resolver_source: Some(result.resolver_source.clone()),
+        };
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        return;
+    }
+
+    println!("dxcan domain discovery for {apex}");
+    let table_opts = DisplayOpts {
+        service_version: false,
+        role_labels: false,
+        precise: args.precise,
+        domain_rich: args.domain_rich,
+    };
+    print_domain_results(
+        &domain_entries,
+        &apex,
+        result.probed,
+        &result.wildcard_ips,
+        &table_opts,
+    );
+    println!(
+        "\n{} subdomain(s) — scanned in {} (info_level={info_level})",
+        domain_entries.len(),
+        display::fmt_duration(wall_ms, args.precise)
+    );
+    if args.debug {
+        println!("\n--- debug ---");
+        println!("domain resolvers: {}", result.resolver_source);
+        println!(
+            "domain total:    {}",
+            display::fmt_duration(result.detection_ms, true)
+        );
+        println!("domain probed:   {}", result.probed);
+        println!("domain found:    {}", domain_entries.len());
+        println!("domain workers:  {workers}");
+        println!("wall total:      {}", display::fmt_duration(wall_ms, true));
+    }
 }

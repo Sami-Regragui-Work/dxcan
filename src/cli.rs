@@ -100,6 +100,36 @@ pub struct Args {
     )]
     pub vhost_tls: Option<bool>,
 
+    #[arg(long = "domain")]
+    pub domain: bool,
+
+    #[arg(long = "domain-wordlist")]
+    pub domain_wordlist: Option<String>,
+
+    #[arg(long = "domain-workers")]
+    pub domain_workers: Option<usize>,
+
+    #[arg(long = "domain-wildcard-samples", default_value_t = 3)]
+    pub domain_wildcard_samples: u32,
+
+    #[arg(long = "domain-no-wildcard-filter")]
+    pub domain_no_wildcard_filter: bool,
+
+    #[arg(long = "domain-resolvers")]
+    pub domain_resolvers: Option<String>,
+
+    #[arg(long = "domain-query-timeout")]
+    pub domain_query_timeout: Option<f64>,
+
+    #[arg(long = "domain-aaaa")]
+    pub domain_aaaa: bool,
+
+    #[arg(long = "domain-rich")]
+    pub domain_rich: bool,
+
+    #[arg(long, help = "Smoke wordlists and dev resolver lists for local testing")]
+    pub dev: bool,
+
     #[arg(short, long)]
     pub json: bool,
 

@@ -8,7 +8,7 @@ use tokio::sync::Semaphore;
 
 mod diff;
 mod probe;
-mod wordlist;
+pub mod wordlist;
 
 use diff::{catchall_consensus, is_actionable_hit, length_only_diff};
 pub use probe::{body_hash_hex, is_http_port, port_uses_tls};
@@ -30,6 +30,7 @@ pub struct VhostOptions {
     pub length_margin: usize,
     pub ignore_lengths: Vec<usize>,
     pub ignore_statuses: Vec<u16>,
+    pub dev: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -84,7 +85,7 @@ pub fn parse_status_list(raw: &str) -> Vec<u16> {
 
 pub async fn discover_vhosts(opts: &VhostOptions) -> Result<VhostDiscoverResult, String> {
     let start = Instant::now();
-    let lines = load_wordlist(opts.wordlist_path.as_deref())?;
+    let lines = load_wordlist(opts.wordlist_path.as_deref(), opts.dev)?;
     if lines.is_empty() {
         return Err("wordlist is empty".into());
     }
