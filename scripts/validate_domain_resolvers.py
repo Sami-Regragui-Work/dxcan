@@ -59,6 +59,27 @@ def load_ips(path: Path) -> list[str]:
     return ips
 
 
+def probe_many(
+    ips: list[str],
+    workers: int,
+    timeout: float,
+    qname: str,
+) -> list[tuple[str, float]]:
+    if not ips:
+        return []
+    trusted: list[tuple[str, float]] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(probe_resolver, ip, timeout, qname): ip for ip in ips
+        }
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result is not None:
+                trusted.append(result)
+    trusted.sort(key=lambda row: row[1])
+    return trusted
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Validate DNS resolvers with UDP A probes")
     ap.add_argument("input", type=Path)
@@ -67,35 +88,57 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=0.8)
     ap.add_argument("--limit", type=int, default=512)
     ap.add_argument("--query-name", default="example.com")
+    ap.add_argument(
+        "--pin",
+        type=Path,
+        action="append",
+        default=[],
+        help="Always keep validated resolvers from these files at the front",
+    )
     args = ap.parse_args()
 
-    ips = load_ips(args.input)
-    if not ips:
+    pin_ips: list[str] = []
+    pin_seen: set[str] = set()
+    for pin_path in args.pin:
+        for ip in load_ips(pin_path):
+            if ip not in pin_seen:
+                pin_seen.add(ip)
+                pin_ips.append(ip)
+
+    ips = [ip for ip in load_ips(args.input) if ip not in pin_seen]
+    if not ips and not pin_ips:
         print("[error] no resolvers in input", file=sys.stderr)
         return 1
 
-    trusted: list[tuple[str, float]] = []
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = {
-            pool.submit(probe_resolver, ip, args.timeout, args.query_name): ip for ip in ips
-        }
-        for fut in as_completed(futures):
-            result = fut.result()
-            if result is not None:
-                trusted.append(result)
+    pin_workers = max(1, min(args.workers, len(pin_ips) or 1))
+    pinned = probe_many(pin_ips, pin_workers, args.timeout, args.query_name)
+    bulk = probe_many(ips, args.workers, args.timeout, args.query_name)
 
-    trusted.sort(key=lambda row: row[1])
-    if args.limit > 0:
-        trusted = trusted[: args.limit]
+    merged: list[str] = []
+    seen: set[str] = set()
+    for ip, _ in pinned:
+        if ip not in seen:
+            seen.add(ip)
+            merged.append(ip)
+    slots = args.limit - len(merged) if args.limit > 0 else len(bulk)
+    if slots > 0:
+        for ip, _ in bulk:
+            if ip in seen:
+                continue
+            seen.add(ip)
+            merged.append(ip)
+            slots -= 1
+            if slots == 0:
+                break
 
-    body = "\n".join(ip for ip, _ in trusted) + ("\n" if trusted else "")
+    body = "\n".join(merged) + ("\n" if merged else "")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(body, encoding="utf-8")
     print(
-        f"validated {len(trusted)}/{len(ips)} resolvers -> {args.output} "
-        f"(timeout={args.timeout}s workers={args.workers})"
+        f"validated {len(merged)}/{len(pin_ips) + len(ips)} resolvers -> {args.output} "
+        f"({len(pinned)} pinned, timeout={args.timeout}s workers={args.workers})"
     )
-    return 0 if trusted else 1
+    return 0 if merged else 1
 
 
 if __name__ == "__main__":

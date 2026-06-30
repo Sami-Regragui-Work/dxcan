@@ -11,7 +11,7 @@ META="$DOMAIN_DIR/resolvers-default.meta.json"
 MERGE_PY="$ROOT/scripts/merge_domain_resolvers.py"
 VALIDATE_PY="$ROOT/scripts/validate_domain_resolvers.py"
 INTERVAL_DAYS="${DXCAN_DOMAIN_UPDATE_DAYS:-7}"
-VALIDATE_LIMIT="${DXCAN_DOMAIN_VALIDATE_LIMIT:-512}"
+VALIDATE_LIMIT="${DXCAN_DOMAIN_VALIDATE_LIMIT:-128}"
 VALIDATE_WORKERS="${DXCAN_DOMAIN_VALIDATE_WORKERS:-400}"
 VALIDATE_TIMEOUT="${DXCAN_DOMAIN_VALIDATE_TIMEOUT:-0.8}"
 FORCE=0
@@ -42,7 +42,7 @@ Environment:
   DXCAN_DOMAIN_UPDATE_DAYS          Minimum days between updates (default: 7)
   DXCAN_DOMAIN_RESOLVERS_BASE_URL   Upstream resolver list URL
   DXCAN_DOMAIN_RESOLVERS_BASE       Local file used instead of fetch
-  DXCAN_DOMAIN_VALIDATE_LIMIT       Max trusted resolvers kept (default: 512)
+  DXCAN_DOMAIN_VALIDATE_LIMIT       Max trusted resolvers kept (default: 128)
   DXCAN_DOMAIN_VALIDATE_WORKERS     Validation concurrency (default: 400)
   DXCAN_DOMAIN_VALIDATE_TIMEOUT     Validation probe timeout seconds (default: 0.8)
 
@@ -138,7 +138,8 @@ run_validate() {
         "$MERGED" "$TRUSTED" \
         --workers "$VALIDATE_WORKERS" \
         --timeout "$VALIDATE_TIMEOUT" \
-        --limit "$VALIDATE_LIMIT"
+        --limit "$VALIDATE_LIMIT" \
+        --pin "$EXTRAS"
     copy_sidecars
 }
 
