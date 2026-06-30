@@ -62,15 +62,24 @@ fn merge_wordlist_fallback(base: &Path, extras: &str) -> String {
 }
 
 fn copy_resolvers_sidecar(manifest: &Path) {
-    let src = manifest.join("src/scanners/network/domain/resolvers-default.txt");
-    if !src.is_file() {
+    let trusted = manifest.join("src/scanners/network/domain/resolvers-trusted.txt");
+    let default = manifest.join("src/scanners/network/domain/resolvers-default.txt");
+    let trusted_exists = trusted.is_file();
+    let src = if trusted_exists {
+        trusted.clone()
+    } else if default.is_file() {
+        default
+    } else {
+        return;
+    };
+    let dest_dir = manifest.join("target");
+    if fs::create_dir_all(&dest_dir).is_err() {
         return;
     }
-    let dest = manifest.join("target/resolvers.txt");
-    if let Some(parent) = dest.parent() {
-        let _ = fs::create_dir_all(parent);
+    let _ = fs::copy(&src, dest_dir.join("resolvers.txt"));
+    if trusted_exists {
+        let _ = fs::copy(&trusted, dest_dir.join("resolvers-trusted.txt"));
     }
-    let _ = fs::copy(&src, &dest);
 }
 
 fn write_vhost_wordlist(out_dir: &Path) {
@@ -111,6 +120,7 @@ fn write_vhost_wordlist(out_dir: &Path) {
     }
     println!("cargo:rerun-if-changed={VHOST_CANONICAL}");
     println!("cargo:rerun-if-changed=src/scanners/network/vhost/vhost-extras.txt");
+    println!("cargo:rerun-if-changed=src/scanners/network/domain/resolvers-trusted.txt");
     println!("cargo:rerun-if-changed=src/scanners/network/domain/resolvers-default.txt");
     println!("cargo:rerun-if-changed=src/scanners/network/domain/resolvers-dev.txt");
     println!("cargo:rerun-if-env-changed=DXCAN_VHOST_WORDLIST_BASE");

@@ -45,7 +45,9 @@ pub fn resolve_production_resolvers_path() -> Option<PathBuf> {
         }
     }
     for candidate in [
+        PathBuf::from("target/resolvers-trusted.txt"),
         PathBuf::from("target/resolvers.txt"),
+        PathBuf::from("src/scanners/network/domain/resolvers-trusted.txt"),
         PathBuf::from("src/scanners/network/domain/resolvers-default.txt"),
     ] {
         if candidate.is_file() {
