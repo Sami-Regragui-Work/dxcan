@@ -15,23 +15,23 @@ use tokio::time;
 use super::DnsAnswer;
 
 const SOCKET_BUF_BYTES: i32 = 4 * 1024 * 1024;
-const SHARD_COUNT: usize = 32;
-const READER_TASKS: usize = 4;
+const LANE_COUNT: usize = 4;
 
 type PendingMap = HashMap<u16, oneshot::Sender<Vec<u8>>>;
 
-pub struct UdpDnsClient {
+struct UdpLane {
     socket: Arc<UdpSocket>,
+    pending: Arc<Mutex<PendingMap>>,
+}
+
+pub struct UdpDnsClient {
+    lanes: Arc<[UdpLane; LANE_COUNT]>,
     resolvers: Vec<SocketAddr>,
     next_resolver: AtomicUsize,
+    next_lane: AtomicUsize,
     next_id: AtomicU16,
     timeout: Duration,
     inflight: Arc<Semaphore>,
-    pending: Arc<[Mutex<PendingMap>; SHARD_COUNT]>,
-}
-
-fn shard_index(id: u16) -> usize {
-    id as usize % SHARD_COUNT
 }
 
 fn bind_udp_socket() -> Result<StdUdpSocket, String> {
@@ -59,6 +59,17 @@ fn bind_udp_socket() -> Result<StdUdpSocket, String> {
     Ok(socket)
 }
 
+async fn build_lane() -> Result<UdpLane, String> {
+    let std_socket = bind_udp_socket()?;
+    let socket = Arc::new(
+        UdpSocket::from_std(std_socket).map_err(|e| format!("udp tokio: {e}"))?,
+    );
+    Ok(UdpLane {
+        socket: socket.clone(),
+        pending: Arc::new(Mutex::new(PendingMap::new())),
+    })
+}
+
 pub async fn build_udp_client(
     ips: &[IpAddr],
     timeout: Duration,
@@ -67,39 +78,41 @@ pub async fn build_udp_client(
         return Err("no DNS resolvers configured".into());
     }
     let resolvers: Vec<SocketAddr> = ips.iter().map(|ip| SocketAddr::new(*ip, 53)).collect();
-    let std_socket = bind_udp_socket()?;
-    let socket = UdpSocket::from_std(std_socket).map_err(|e| format!("udp tokio: {e}"))?;
-    let pending: Arc<[Mutex<PendingMap>; SHARD_COUNT]> =
-        Arc::new(std::array::from_fn(|_| Mutex::new(PendingMap::new())));
-    let client = Arc::new(UdpDnsClient {
-        socket: Arc::new(socket),
+    let mut lanes = Vec::with_capacity(LANE_COUNT);
+    for _ in 0..LANE_COUNT {
+        lanes.push(build_lane().await?);
+    }
+    let lanes_arr: [UdpLane; LANE_COUNT] = lanes
+        .try_into()
+        .map_err(|_| "lane init failed".to_string())?;
+    let lanes = Arc::new(lanes_arr);
+    for lane in lanes.iter() {
+        spawn_reader(lane.socket.clone(), lane.pending.clone());
+    }
+    Ok(Arc::new(UdpDnsClient {
+        lanes,
         resolvers,
         next_resolver: AtomicUsize::new(0),
+        next_lane: AtomicUsize::new(0),
         next_id: AtomicU16::new(1),
         timeout,
         inflight: Arc::new(Semaphore::new(100)),
-        pending,
-    });
-    for _ in 0..READER_TASKS {
-        spawn_reader(client.clone());
-    }
-    Ok(client)
+    }))
 }
 
-fn spawn_reader(client: Arc<UdpDnsClient>) {
+fn spawn_reader(socket: Arc<UdpSocket>, pending: Arc<Mutex<PendingMap>>) {
     tokio::spawn(async move {
         let mut buf = vec![0u8; 512];
         loop {
-            let Ok((n, _)) = client.socket.recv_from(&mut buf).await else {
+            let Ok((n, _)) = socket.recv_from(&mut buf).await else {
                 continue;
             };
             let Ok(msg) = Message::from_bytes(&buf[..n]) else {
                 continue;
             };
             let id = msg.metadata.id;
-            let shard = shard_index(id);
-            let mut pending = client.pending[shard].lock().await;
-            if let Some(tx) = pending.remove(&id) {
+            let mut map = pending.lock().await;
+            if let Some(tx) = map.remove(&id) {
                 let _ = tx.send(buf[..n].to_vec());
             }
         }
@@ -110,6 +123,10 @@ impl UdpDnsClient {
     fn pick_resolver(&self) -> SocketAddr {
         let idx = self.next_resolver.fetch_add(1, Ordering::Relaxed);
         self.resolvers[idx % self.resolvers.len()]
+    }
+
+    fn pick_lane(&self) -> usize {
+        self.next_lane.fetch_add(1, Ordering::Relaxed) % LANE_COUNT
     }
 
     fn next_query_id(&self) -> u16 {
@@ -135,20 +152,21 @@ impl UdpDnsClient {
         fqdn: &str,
         id: u16,
         resolver: SocketAddr,
+        lane_idx: usize,
     ) -> Result<Vec<u8>, String> {
+        let lane = &self.lanes[lane_idx];
         let bytes = Self::encode_query(fqdn, id)?;
-        let shard = shard_index(id);
         let (tx, rx) = oneshot::channel();
-        self.pending[shard].lock().await.insert(id, tx);
-        if self.socket.send_to(&bytes, resolver).await.is_err() {
-            self.pending[shard].lock().await.remove(&id);
+        lane.pending.lock().await.insert(id, tx);
+        if lane.socket.send_to(&bytes, resolver).await.is_err() {
+            lane.pending.lock().await.remove(&id);
             return Err(format!("{fqdn}: send"));
         }
         match time::timeout(self.timeout, rx).await {
             Ok(Ok(payload)) => Ok(payload),
             Ok(Err(_)) => Err(format!("{fqdn}: dropped")),
             Err(_) => {
-                self.pending[shard].lock().await.remove(&id);
+                lane.pending.lock().await.remove(&id);
                 Err(format!("{fqdn}: timeout"))
             }
         }
@@ -160,14 +178,19 @@ impl UdpDnsClient {
             .acquire()
             .await
             .map_err(|_| format!("{fqdn}: closed"))?;
+        let lane_idx = self.pick_lane();
         let id = self.next_query_id();
         let resolver = self.pick_resolver();
-        match self.send_and_wait(fqdn, id, resolver).await {
+        match self.send_and_wait(fqdn, id, resolver, lane_idx).await {
             Ok(payload) => parse_a_response(&payload, fqdn),
             Err(first) if first.ends_with(": timeout") => {
+                let lane_idx = self.pick_lane();
                 let id = self.next_query_id();
                 let resolver = self.pick_resolver();
-                match self.send_and_wait(fqdn, id, resolver).await {
+                match self
+                    .send_and_wait(fqdn, id, resolver, lane_idx)
+                    .await
+                {
                     Ok(payload) => parse_a_response(&payload, fqdn),
                     Err(_) => Err(first),
                 }
