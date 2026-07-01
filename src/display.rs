@@ -199,6 +199,19 @@ pub fn print_domain_results(
     }
 }
 
+pub fn print_domain_stats(stats: &crate::output::DomainStats) {
+    println!();
+    println!(
+        "Probe stats: probed={} hits={} nxdomain={} timeout={} errors={} wildcard_filtered={}",
+        stats.probed,
+        stats.hits,
+        stats.nxdomain,
+        stats.timeout,
+        stats.errors,
+        stats.wildcard_filtered
+    );
+}
+
 use crate::scanners::network::os::OsMatchDetails;
 
 pub fn print_os_details(guess: &str, accuracy: Option<u8>, details: &OsMatchDetails) {

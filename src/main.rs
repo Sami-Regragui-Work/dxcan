@@ -11,10 +11,10 @@ use std::time::Instant;
 
 use cli::Args;
 use display::{
-    print_domain_results, print_open_ports_summary, print_os_details, print_port_table,
+    print_domain_results, print_domain_stats, print_open_ports_summary, print_os_details, print_port_table,
     print_vhost_results, DisplayOpts,
 };
-use output::{DomainEntry, PortEntry, ScanOutput, VhostEntry};
+use output::{DomainEntry, DomainStats, PortEntry, ScanOutput, VhostEntry};
 use resolver::{resolve_host, reverse_dns};
 use scanners::network::port::{parse_ports, run_port_scan, scan_mode, PortResult, ScanPlan};
 use scanners::network::{
@@ -388,6 +388,7 @@ async fn main() {
             domain_elapsed_ms: None,
             domain_wildcard_ips: Vec::new(),
             domain_resolver_source: None,
+            domain_stats: None,
         };
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     } else {
@@ -521,9 +522,21 @@ async fn run_domain_only(args: &Args) {
         .domain_query_timeout
         .unwrap_or_else(|| args.timeout.min(1.0).max(0.5));
     let query_timeout = std::time::Duration::from_secs_f64(query_secs);
-    let query_aaaa = args.domain_aaaa || args.domain_rich;
-    let show_cname = args.domain_rich;
-    let show_ttl = args.domain_rich;
+    let query_aaaa = args.domain_aaaa || args.domain_rich || args.domain_duel_rich;
+    let show_cname = args.domain_rich || args.domain_duel_rich;
+    let show_ttl = args.domain_rich || args.domain_duel_rich;
+    let show_stats = args.domain_stats || args.domain_duel_rich;
+    let mut filter_wildcard = !args.domain_no_wildcard_filter;
+    let mut max_retries = args.domain_retry;
+    let mut resolver_limit = args.domain_resolvers_limit;
+    if args.domain_fast {
+        filter_wildcard = false;
+        max_retries = 1;
+        resolver_limit = Some(8);
+    }
+    if args.domain_duel_rich {
+        filter_wildcard = true;
+    }
     let opts = DomainOptions {
         apex: apex.clone(),
         wordlist_path,
@@ -531,12 +544,14 @@ async fn run_domain_only(args: &Args) {
         workers,
         query_timeout,
         wildcard_samples: args.domain_wildcard_samples,
-        filter_wildcard: !args.domain_no_wildcard_filter,
+        filter_wildcard,
         query_aaaa,
         show_cname,
         show_ttl,
         dev: args.dev,
         max_inflight: args.domain_max_inflight,
+        max_retries,
+        resolver_limit,
     };
 
     let result = match discover_domains(&opts).await {
@@ -573,6 +588,15 @@ async fn run_domain_only(args: &Args) {
         }
     }
 
+    let domain_stats = DomainStats {
+        probed: result.stats.probed,
+        hits: result.stats.hits,
+        nxdomain: result.stats.nxdomain,
+        timeout: result.stats.timeout,
+        errors: result.stats.errors,
+        wildcard_filtered: result.stats.wildcard_filtered,
+    };
+
     if args.json {
         let output = ScanOutput {
             tool: "dxcan".into(),
@@ -605,6 +629,11 @@ async fn run_domain_only(args: &Args) {
             domain_elapsed_ms: Some(result.detection_ms),
             domain_wildcard_ips: result.wildcard_ips.clone(),
             domain_resolver_source: Some(result.resolver_source.clone()),
+            domain_stats: if show_stats {
+                Some(domain_stats.clone())
+            } else {
+                None
+            },
         };
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
         return;
@@ -615,7 +644,7 @@ async fn run_domain_only(args: &Args) {
         service_version: false,
         role_labels: false,
         precise: args.precise,
-        domain_rich: args.domain_rich,
+        domain_rich: args.domain_rich || args.domain_duel_rich,
     };
     print_domain_results(
         &domain_entries,
@@ -624,6 +653,9 @@ async fn run_domain_only(args: &Args) {
         &result.wildcard_ips,
         &table_opts,
     );
+    if show_stats {
+        print_domain_stats(&domain_stats);
+    }
     println!(
         "\n{} subdomain(s) — scanned in {} (info_level={info_level})",
         domain_entries.len(),
@@ -642,6 +674,18 @@ async fn run_domain_only(args: &Args) {
         println!("domain probed:   {}", result.probed);
         println!("domain found:    {}", domain_entries.len());
         println!("domain workers:  {workers}");
+        if show_stats {
+            println!(
+                "domain nxdomain: {}",
+                domain_stats.nxdomain
+            );
+            println!("domain timeout:  {}", domain_stats.timeout);
+            println!("domain errors:   {}", domain_stats.errors);
+            println!(
+                "domain wildcard: {}",
+                domain_stats.wildcard_filtered
+            );
+        }
         println!("wall total:      {}", display::fmt_duration(wall_ms, true));
     }
 }

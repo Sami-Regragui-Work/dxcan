@@ -130,6 +130,27 @@ pub struct Args {
     #[arg(long = "domain-max-inflight")]
     pub domain_max_inflight: Option<usize>,
 
+    #[arg(long = "domain-retry", default_value_t = 1)]
+    pub domain_retry: u8,
+
+    #[arg(long = "domain-resolvers-limit")]
+    pub domain_resolvers_limit: Option<usize>,
+
+    #[arg(
+        long = "domain-fast",
+        help = "dnsx-style fast path: no wildcard filter, retry 1, cap resolvers at 8"
+    )]
+    pub domain_fast: bool,
+
+    #[arg(long = "domain-stats", help = "Print probe counters (timeouts, nxdomain, wildcard drops)")]
+    pub domain_stats: bool,
+
+    #[arg(
+        long = "domain-duel-rich",
+        help = "Amass duel mode: A/AAAA/CNAME/TTL + wildcard filter + stats (pair with --json)"
+    )]
+    pub domain_duel_rich: bool,
+
     #[arg(long, help = "Smoke wordlists and dev resolver lists for local testing")]
     pub dev: bool,
 

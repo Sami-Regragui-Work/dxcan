@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::stream::{FuturesUnordered, StreamExt};
-use tokio::sync::Semaphore;
+use tokio::sync::{watch, Semaphore};
 
 mod dns;
 mod resolvers;
@@ -32,6 +32,18 @@ pub struct DomainOptions {
     pub show_ttl: bool,
     pub dev: bool,
     pub max_inflight: Option<usize>,
+    pub max_retries: u8,
+    pub resolver_limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct DomainProbeStats {
+    pub probed: usize,
+    pub hits: usize,
+    pub nxdomain: usize,
+    pub timeout: usize,
+    pub errors: usize,
+    pub wildcard_filtered: usize,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -54,6 +66,17 @@ pub struct DomainDiscoverResult {
     pub wildcard_ips: Vec<String>,
     pub detection_ms: f64,
     pub resolver_source: String,
+    pub stats: DomainProbeStats,
+}
+
+fn classify_lookup_error(err: &str) -> &'static str {
+    if err.ends_with(": nxdomain") || err.contains(": nxdomain") {
+        "nxdomain"
+    } else if err.ends_with(": timeout") {
+        "timeout"
+    } else {
+        "error"
+    }
 }
 
 pub fn normalize_apex(host: &str) -> String {
@@ -111,8 +134,13 @@ pub async fn discover_domains(opts: &DomainOptions) -> Result<DomainDiscoverResu
         .filter(|h| !h.is_empty() && h != &apex)
         .collect();
 
-    let (resolver_ips, resolver_source) =
+    let (mut resolver_ips, resolver_source) =
         load_resolver_ips(opts.resolvers_path.as_deref(), opts.dev)?;
+    if let Some(limit) = opts.resolver_limit {
+        if limit > 0 && resolver_ips.len() > limit {
+            resolver_ips.truncate(limit);
+        }
+    }
     let rich = opts.query_aaaa || opts.show_cname || opts.show_ttl;
     let max_inflight = compute_max_inflight(
         opts.workers,
@@ -125,21 +153,24 @@ pub async fn discover_domains(opts: &DomainOptions) -> Result<DomainDiscoverResu
             opts.query_timeout,
             rich,
             max_inflight,
+            opts.max_retries,
         )
         .await?,
     );
 
-    let wildcard_set = if opts.filter_wildcard {
-        detect_wildcard_ips(
-            &client,
-            &apex,
-            opts.wildcard_samples,
-            start,
-            opts.query_aaaa,
-        )
-        .await
+    let wildcard_watch = if opts.filter_wildcard {
+        let (tx, rx) = watch::channel(None::<BTreeSet<IpAddr>>);
+        let client_w = client.clone();
+        let apex_w = apex.clone();
+        let samples = opts.wildcard_samples;
+        let query_aaaa = opts.query_aaaa;
+        tokio::spawn(async move {
+            let set = detect_wildcard_ips(&client_w, &apex_w, samples, start, query_aaaa).await;
+            let _ = tx.send(Some(set));
+        });
+        Some(rx)
     } else {
-        BTreeSet::new()
+        None
     };
 
     let sem = Arc::new(Semaphore::new(opts.workers.max(1)));
@@ -155,24 +186,56 @@ pub async fn discover_domains(opts: &DomainOptions) -> Result<DomainDiscoverResu
     }
 
     let mut hits = Vec::new();
-    let mut probed = 0usize;
+    let mut stats = DomainProbeStats::default();
     while let Some((fqdn, result, latency_ms)) = futs.next().await {
-        probed += 1;
-        let Ok(answer) = result else { continue };
-        if opts.filter_wildcard && is_wildcard_hit(&answer.wildcard_ips(), &wildcard_set) {
+        stats.probed += 1;
+        let Ok(answer) = result else {
+            match result {
+                Err(ref e) => match classify_lookup_error(e) {
+                    "nxdomain" => stats.nxdomain += 1,
+                    "timeout" => stats.timeout += 1,
+                    _ => stats.errors += 1,
+                },
+                _ => {}
+            }
             continue;
+        };
+        if opts.filter_wildcard {
+            if let Some(ref rx) = wildcard_watch {
+                if let Some(ref set) = *rx.borrow() {
+                    if is_wildcard_hit(&answer.wildcard_ips(), set) {
+                        stats.wildcard_filtered += 1;
+                        continue;
+                    }
+                }
+            }
         }
+        stats.hits += 1;
         hits.push(answer_to_hit(fqdn, &answer, latency_ms, opts));
     }
 
     hits.sort_by(|a, b| a.fqdn.cmp(&b.fqdn));
 
+    let wildcard_set = if let Some(rx) = wildcard_watch {
+        let mut guard = rx.clone();
+        while guard.borrow().is_none() {
+            if guard.changed().await.is_err() {
+                break;
+            }
+        }
+        let set = guard.borrow().clone().unwrap_or_default();
+        set
+    } else {
+        BTreeSet::new()
+    };
+
     Ok(DomainDiscoverResult {
         hits,
-        probed,
+        probed: stats.probed,
         wildcard_ips: wildcard_set.iter().map(|ip| format_ip(*ip)).collect(),
         detection_ms: start.elapsed().as_secs_f64() * 1000.0,
         resolver_source: resolver_source.label(),
+        stats,
     })
 }
 

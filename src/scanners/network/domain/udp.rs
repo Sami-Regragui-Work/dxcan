@@ -32,6 +32,7 @@ pub struct UdpDnsClient {
     next_lane: AtomicUsize,
     next_id: AtomicU16,
     timeout: Duration,
+    max_retries: u8,
     inflight: Arc<Semaphore>,
 }
 
@@ -77,6 +78,7 @@ pub async fn build_udp_client(
     ips: &[IpAddr],
     timeout: Duration,
     max_inflight: usize,
+    max_retries: u8,
 ) -> Result<Arc<UdpDnsClient>, String> {
     if ips.is_empty() {
         return Err("no DNS resolvers configured".into());
@@ -98,6 +100,7 @@ pub async fn build_udp_client(
         next_lane: AtomicUsize::new(0),
         next_id: AtomicU16::new(1),
         timeout,
+        max_retries: max_retries.max(1),
         inflight: Arc::new(Semaphore::new(max_inflight.max(1))),
     }))
 }
@@ -181,32 +184,34 @@ impl UdpDnsClient {
             .acquire()
             .await
             .map_err(|_| format!("{fqdn}: closed"))?;
-        let lane_idx = self.pick_lane();
-        let id = self.next_query_id();
-        let resolver = self.pick_resolver();
-        match self.send_and_wait(fqdn, id, resolver, lane_idx).await {
-            Ok(payload) => parse_a_response(&payload, fqdn),
-            Err(first) if first.ends_with(": timeout") => {
-                let retry_timeout =
-                    Duration::from_secs_f64(self.timeout.as_secs_f64() / 2.0);
-                if retry_timeout < Duration::from_millis(200) {
-                    return Err(first);
-                }
-                let lane_idx = self.pick_lane();
-                let id = self.next_query_id();
-                let resolver = self.pick_resolver();
-                match time::timeout(
-                    retry_timeout,
-                    self.send_and_wait(fqdn, id, resolver, lane_idx),
-                )
-                .await
-                {
-                    Ok(Ok(payload)) => parse_a_response(&payload, fqdn),
-                    Ok(Err(_)) | Err(_) => Err(first),
-                }
+        let attempts = self.max_retries.max(1);
+        let mut last_err = String::new();
+        for attempt in 0..attempts {
+            let lane_idx = self.pick_lane();
+            let id = self.next_query_id();
+            let resolver = self.pick_resolver();
+            let timeout = if attempt == 0 {
+                self.timeout
+            } else {
+                Duration::from_secs_f64(self.timeout.as_secs_f64() / 2.0)
+                    .max(Duration::from_millis(200))
+            };
+            match time::timeout(
+                timeout,
+                self.send_and_wait(fqdn, id, resolver, lane_idx),
+            )
+            .await
+            {
+                Ok(Ok(payload)) => return parse_a_response(&payload, fqdn),
+                Ok(Err(err)) => last_err = err,
+                Err(_) => last_err = format!("{fqdn}: timeout"),
             }
-            Err(other) => Err(other),
         }
+        Err(if last_err.is_empty() {
+            format!("{fqdn}: failed")
+        } else {
+            last_err
+        })
     }
 }
 

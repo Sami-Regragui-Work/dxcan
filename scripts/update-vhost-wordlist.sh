@@ -127,6 +127,8 @@ update_due() {
 copy_sidecars() {
     mkdir -p "$ROOT/target"
     cp "$MERGED" "$ROOT/target/vhost-wordlist.txt"
+    cp "$MERGED" "$ROOT/src/scanners/network/domain/domain-wordlist.txt"
+    cp "$MERGED" "$ROOT/target/domain-wordlist.txt"
 }
 
 run_merge() {

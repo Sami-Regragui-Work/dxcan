@@ -34,6 +34,16 @@ pub struct VhostEntry {
     pub latency_ms: f64,
 }
 
+#[derive(Serialize, Clone, Default)]
+pub struct DomainStats {
+    pub probed: usize,
+    pub hits: usize,
+    pub nxdomain: usize,
+    pub timeout: usize,
+    pub errors: usize,
+    pub wildcard_filtered: usize,
+}
+
 #[derive(Serialize, Clone)]
 pub struct DomainEntry {
     pub fqdn: String,
@@ -101,4 +111,6 @@ pub struct ScanOutput {
     pub domain_wildcard_ips: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain_resolver_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_stats: Option<DomainStats>,
 }
